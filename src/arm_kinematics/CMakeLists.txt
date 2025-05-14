@@ -166,7 +166,7 @@ include_directories(
 #   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 # )
 catkin_install_python(PROGRAMS
-  scripts/arm_dh.py
+  scripts/arm_B_dh.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 ## Mark executables for installation

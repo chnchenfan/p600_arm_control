@@ -101,7 +101,7 @@ def dh_matrix(alpha, a, d, theta):
     return matrix
 #设置坐标系个数
 joint_num = 3     #机械臂关节个数
-CoordinatePoints_num=1+joint_num    #坐标系个数
+CoordinatePoints_num=2+joint_num    #坐标系个数
 l1 = 0.0375
 l2 = 0.105
 l3 = 0.18326
@@ -115,7 +115,7 @@ joints_theta = [0,math.atan(55.94/88.86),-math.atan(97.64/155.09)]
 
 # 看DH表定义
 joints_angle_init = [ 0,-math.atan(55.94/88.86)+math.pi/2, math.atan(97.64/155.09)]  #给这个时，4个坐标点在一个线上，逆解角度在这个基础上，所有角度为0；但是正解是DH表，所以需要转换下
-joints_angle = [ -0,0, 0]   #转动值可修改，0默认为初始状态,以此时DH表的基础作为初始状态角度
+joints_angle = [ 0,0, 0]   #转动值可修改，0默认为初始状态,以此时DH表的基础作为初始状态角度
 # 机体原点
 T_I = np.array([
     [1, 0, 0, 0],
@@ -130,22 +130,27 @@ T_B0 = np.array([
     [0, 0, -1, 0.10594],
     [0, 0, 0, 1]
 ])
-# 记录所有T矩阵
-T_hm = []
-T_hm.append(T_I)
-# T_hm.append(T_B0)
+T = []  # 记录所有T矩阵
+T.append(T_I)
+T.append(T_B0)
+T_dh= []  # 记录DH表T矩阵
+T_dh.append(T_I)
 # 添加T矩阵
 for i in range(joint_num):        
-    T_hm.append(dh_matrix(joints_alpha[i], joints_a[i], joints_d[i], joints_theta[i]+joints_angle[i]))
+    T.append(dh_matrix(joints_alpha[i], joints_a[i], joints_d[i], joints_theta[i]+joints_angle[i]))
+    T_dh.append(dh_matrix(joints_alpha[i], joints_a[i], joints_d[i], joints_theta[i]+joints_angle[i]))
 
-# T变换矩阵相乘
+# T变换矩阵相乘，计算基于机体坐标系的坐标点在世界坐标系下的坐标值
 for i in range(CoordinatePoints_num-1):
-    T_hm[i+1] = np.dot(T_hm[i], T_hm[i+1])  
+    T[i+1] = np.dot(T[i], T[i+1])  
+# T_dh变换矩阵相乘，计算基于DH表坐标系的坐标点，即机械臂起始坐标系
+for i in range(CoordinatePoints_num-2):
+    T_dh[i+1] = np.dot(T_dh[i], T_dh[i+1]) 
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
 
 for i in range(CoordinatePoints_num):
-    hm = T_hm[i]
+    hm = T[i]
     x, y, z = hm[:3, 3]
     ax.scatter(x, y, z, c='r')
 
@@ -159,15 +164,20 @@ for i in range(CoordinatePoints_num):
     ax.plot([origin[0], z_axis[0]], [origin[1], z_axis[1]], [origin[2], z_axis[2]], 'b-')
 
     if i > 0:
-        prev_hm = T_hm[i-1]
+        prev_hm = T[i-1]
         prev_origin = prev_hm[:3, 3]
         ax.plot([prev_origin[0], origin[0]], [prev_origin[1], origin[1]], [prev_origin[2], origin[2]], 'k--')
 # #打印各坐标系原点的在世界坐标系下的坐标值
-p=[]
+print("打印基于机体坐标系Sigma_B的坐标系位置信息")
 for i in range(CoordinatePoints_num):
-    print(np.round(T_hm[i][:3, 3], 5))
+    print(np.round(T[i][:3, 3], 5))
+
+p=[]
+print("打印基于机械臂坐标系Sigma_0的坐标系位置信息")
+for i in range(CoordinatePoints_num-1):
+    print(np.round(T_dh[i][:3, 3], 5))
     if i==3:
-        p=np.round(T_hm[i][:3, 3], 5)
+        p=(np.round(T_dh[i][:3, 3], 5))
 # # 调用函数
 print("角度解：")
 theta= calculate_angles_all(p[0], p[1], p[2], l1, l2, l3) #初始角度为0，以所有坐标点在一个直线上
@@ -180,6 +190,7 @@ for i in range(len(theta)):
     print(f"第{i+1}组解: t1:{theta1[i][0]:.6f} t2:{theta1[i][1]:.6f} t3:{theta1[i][2]:.6f}")
 
 print("位置验证：")
+print("打印基于机械臂坐标系Sigma_0的坐标系位置信息")
 for i in range(len(theta)):
     theta1 = theta[i][0]
     theta2 = theta[i][1]
@@ -188,6 +199,24 @@ for i in range(len(theta)):
     y=-math.sin(theta1)*(l2*math.sin(theta2)+l3*math.sin(theta2+theta3))
     z=l1+l2*math.cos(theta2)+l3*math.cos(theta2+theta3)
     print(f"第{i+1}组解: x:{x:.6f} y:{y:.6f} z:{z:.6f}")
+print("打印基于机械臂坐标系Sigma_B的坐标系位置信息")
+for i in range(len(theta)):
+    theta1 = theta[i][0]
+    theta2 = theta[i][1]
+    theta3 = theta[i][2]
+    x=-math.cos(theta1)*(l2*math.sin(theta2)+l3*math.sin(theta2+theta3))
+    y=-math.sin(theta1)*(l2*math.sin(theta2)+l3*math.sin(theta2+theta3))
+    z=l1+l2*math.cos(theta2)+l3*math.cos(theta2+theta3)
+    P_03 = np.array([x, y, z, 1])
+    P_B3= np.dot(T_B0, P_03)
+    print(f"第{i+1}组解: x:{P_B3[0]:.6f} y:{P_B3[1]:.6f} z:{P_B3[2]:.6f}")
+
+    # # 已知末端点在机体Sigma_B坐标的位置，求末端点在Sigma_0的位置信息
+    # T_B0_inv = np.linalg.inv(T_B0)
+    # P_03_=np.dot(T_B0_inv, P_B3)
+    # print(f"第------{i+1}组解: x:{P_03_[0]:.6f} y:{P_03_[1]:.6f} z:{P_03_[2]:.6f}")
+
+
 ax.set_xlabel('X')
 ax.set_ylabel('Y')
 ax.set_zlabel('Z')
