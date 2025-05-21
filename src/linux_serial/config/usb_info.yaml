@@ -1,0 +1,5 @@
+#判断是否载入该yaml文件
+load_param_flag: 1
+
+#usb
+arm_usb: /dev/ttyUSB0

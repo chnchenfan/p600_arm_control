@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<launch>
+    <rosparam file="$(find linux_serial)/config/usb_info.yaml" command="load" />
+    <node pkg="linux_serial" type="serial_" name="serial1"  output="screen"/>
+</launch>
