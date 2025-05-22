@@ -1,23 +1,27 @@
 #include <ros/ros.h>
 #include <boost/asio.hpp>
-#include "linux_serial/Sub_data.h"
-#define DATA 2
+#include "Servos/Server_.h"
+#include <boost/bind.hpp>
+#include <boost/asio.hpp>
+#include <thread>
+#include <deque>
 using namespace boost::asio;
-//订阅消息和串口处理是分开的
 class Linux_serial{
 public:
-    Sub_data sub_data;
+    Servers_ servers;//所有电机
     //串口相关对象
-    boost::asio::io_service iosev;
-    boost::asio::serial_port sp;
+    boost::asio::io_service iosev;//用于管理异步操作。
+    boost::asio::serial_port sp;//用于实际进行串口通信。
     Linux_serial(ros::NodeHandle &nh,std::string usb_name);
     ~Linux_serial();
-    void Send_data();
-    void Read_data();
+    void Send_data(uint8_t *data,int len);
+    void Send_all_data();
 private:
-    unsigned char send_pack_info[DATA+2];
-    void Int2char(int value,unsigned char& high_byte,unsigned char& low_byte);//传输的int值在uint16_t范围内，对应好
-    uint16_t Char2int(uint8_t high_byte, uint8_t low_byte);//注意这里接受整数范围为uint16_t的范围
-    //若是传输int32_t的信息，则需要4个字节变量去转换
-    //若是传输int16_t的信息，则需要2个字节变量去转换
+    std::deque<uint8_t> rx_buffer;  // 接收数据缓冲区
+    uint8_t read_buf[128];          // 临时读取缓冲区
+    std::thread io_thread;         // IO服务线程,这里用了串口异步通讯
+    void start_async_read();
+    void handle_read(const boost::system::error_code& error, size_t bytes_transferred);
+    void process_rx_data();
+    void handle_valid_frame(const std::vector<uint8_t>& frame);
 };

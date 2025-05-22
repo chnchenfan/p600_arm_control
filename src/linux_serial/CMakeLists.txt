@@ -123,7 +123,7 @@ include_directories(
     ${catkin_INCLUDE_DIRS}
 )
 
-add_executable(serial_ src/linux_serial.cpp src/linux_serial/Sub_data.cpp src/linux_serial/linux_serial.cpp)
+add_executable(serial_ src/linux_serial.cpp src/Servos/Server_.cpp src/linux_serial/linux_serial.cpp)
 target_link_libraries(serial_ ${catkin_LIBRARIES})
 
 
