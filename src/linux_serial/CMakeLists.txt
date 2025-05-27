@@ -8,6 +8,7 @@ project(linux_serial)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
+  dynamic_reconfigure
   message_generation
   message_runtime
   roscpp
@@ -49,11 +50,10 @@ find_package(catkin REQUIRED COMPONENTS
 ##   * add every package in MSG_DEP_SET to generate_messages(DEPENDENCIES ...)
 
 ## Generate messages in the 'msg' folder
-# add_message_files(
-#   FILES
-#   Message1.msg
-#   Message2.msg
-# )
+add_message_files(
+  FILES
+  arm_angle.msg
+)
 
 ## Generate services in the 'srv' folder
 # add_service_files(
@@ -70,10 +70,7 @@ find_package(catkin REQUIRED COMPONENTS
 # )
 
 ## Generate added messages and services with any dependencies listed here
-# generate_messages(
-#   DEPENDENCIES
-#   std_msgs
-# )
+generate_messages(DEPENDENCIES  std_msgs)
 
 ################################################
 ## Declare ROS dynamic reconfigure parameters ##
@@ -90,10 +87,9 @@ find_package(catkin REQUIRED COMPONENTS
 ##     and list every .cfg file to be processed
 
 ## Generate dynamic reconfigure parameters in the 'cfg' folder
-# generate_dynamic_reconfigure_options(
-#   cfg/DynReconf1.cfg
-#   cfg/DynReconf2.cfg
-# )
+generate_dynamic_reconfigure_options(
+  cfg/angle_set.cfg
+)
 
 ###################################
 ## catkin specific configuration ##
@@ -126,7 +122,8 @@ include_directories(
 add_executable(serial_ src/linux_serial.cpp src/Servos/Server_.cpp src/linux_serial/linux_serial.cpp)
 target_link_libraries(serial_ ${catkin_LIBRARIES})
 
-
+add_executable(dynamic_angle src/dynamic_angle.cpp)
+target_link_libraries(dynamic_angle ${catkin_LIBRARIES})
 #############
 ## Install ##
 #############

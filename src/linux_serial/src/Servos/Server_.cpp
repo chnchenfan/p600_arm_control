@@ -1,6 +1,16 @@
 #include "Servos/Server_.h"
 Server_::Server_(ros::NodeHandle nh,uint8_t addr){
     state_pkg.addr_ = addr;
+    if(state_pkg.addr_==4){
+        multiple_reducer=40;
+        direction_rotation=1;
+    }else{
+        multiple_reducer=48;
+        direction_rotation=-1;
+    }
+    nh.getParam("/arm/joint"+std::to_string(addr)+"/min", pos_angle_min);
+    nh.getParam("/arm/joint"+std::to_string(addr)+"/max", pos_angle_max);
+    pos_angle_sub=nh.subscribe<std_msgs::Float64>("/wjl/arm/joint"+std::to_string(addr)+"/pos_target",10,&Server_::Pos_target_cb,this);
 }
 Server_::~Server_(){
 
@@ -48,17 +58,25 @@ void Server_::Read_Sys_Params(){
   * @retval   地址 + 功能码 + 命令状态 + 校验字节
   */
 void Server_::Pos_Control(){
-    uint16_t vel=10;
+    uint16_t vel=100;
     uint8_t acc=0;
     uint8_t dir=0;
-    pos_angle_s=20;
     uint32_t clk=0;
-    if(pos_angle_s>=0){
+    // 角度限制
+    double send_pos;
+    send_pos=direction_rotation*pos_angle_s;
+    if(send_pos<pos_angle_min){
+        send_pos=pos_angle_min;
+    }else if(send_pos>pos_angle_max){
+        send_pos=pos_angle_max;
+    }
+    // 角度转脉冲数
+    if(send_pos>=0){
         dir=0;
-        clk=80*pos_angle_s/9;//360度对应3200脉冲
+        clk=80*send_pos/9*multiple_reducer;//360度对应3200脉冲，用了减速器，电机转动48圈，减去器带动机械臂的转动1圈
     }else{
         dir=1;
-        clk=-80*pos_angle_s/9;
+        clk=-80*send_pos/9*multiple_reducer;
     }
     // 装载命令
     send_pack[0]  =  state_pkg.addr_;                      // 地址
@@ -87,20 +105,21 @@ void Server_::Pos_Control(){
  * @return 无
  */
 void Server_::State_show(){
+    //得到的是步进电机的状态，所以要先将脉冲数转换成角度，然后转成减速器所需要的角度，减少48倍
     if(state_pkg.direction_tp==0){
-        pos_angle_t=(double)state_pkg.target_position*360/65536;
+        pos_angle_t=(double)state_pkg.target_position*360/65536/multiple_reducer*direction_rotation;
     }else{
-        pos_angle_t=-(double)state_pkg.target_position*360/65536;
+        pos_angle_t=-(double)state_pkg.target_position*360/65536/multiple_reducer*direction_rotation;
     }
     if(state_pkg.direction_cp==0){
-        pos_angle_r=(double)state_pkg.current_position*360/65536;
+        pos_angle_r=(double)state_pkg.current_position*360/65536/multiple_reducer*direction_rotation;
     }else{
-        pos_angle_r=-(double)state_pkg.current_position*360/65536;
+        pos_angle_r=-(double)state_pkg.current_position*360/65536/multiple_reducer*direction_rotation;
     }
     if(state_pkg.direction_pe==0){
-        pos_error=(double)state_pkg.position_error*360/65536;
+        pos_error=(double)state_pkg.position_error*360/65536/multiple_reducer*direction_rotation;
     }else{
-        pos_error=-(double)state_pkg.position_error*360/65536;
+        pos_error=-(double)state_pkg.position_error*360/65536/multiple_reducer*direction_rotation;
     }
     int temp=0;
     if(state_pkg.direction_tv==0){
@@ -108,20 +127,35 @@ void Server_::State_show(){
     }else{
         temp=-1;
     }
-    std::cout<<"第"<<static_cast<int>(state_pkg.addr_)<<"号电机状态："<<std::endl;
-    std::cout<<"目标位置:"<<pos_angle_t<<"度"<<std::endl;
-    std::cout<<"当前位置:"<<pos_angle_r<<"度"<<std::endl;
-    std::cout<<"位置误差:"<<pos_error<<"度"<<std::endl;
-    std::cout<<"总线电压:"<<state_pkg.bus_voltage<<"mV"<<std::endl;
-    std::cout<<"相电流:"<<state_pkg.bus_phase_current<<"mA"<<std::endl;
-    std::cout<<"校准后编报器值:"<<state_pkg.encoder_value<<std::endl;
-    std::cout<<"速度:"<<temp*state_pkg.target_velocity<<"RPM"<<std::endl;
+    // std::cout<<"第"<<static_cast<int>(state_pkg.addr_)<<"号电机状态："<<std::endl;
+    // std::cout<<"目标位置:"<<pos_angle_t<<"度"<<std::endl;
+    // std::cout<<"当前位置:"<<pos_angle_r<<"度"<<std::endl;
+    // std::cout<<"位置误差:"<<pos_error<<"度"<<std::endl;
+    // std::cout<<"总线电压:"<<state_pkg.bus_voltage<<"mV"<<std::endl;
+    // std::cout<<"相电流:"<<state_pkg.bus_phase_current<<"mA"<<std::endl;
+    // std::cout<<"校准后编报器值:"<<state_pkg.encoder_value<<std::endl;
+    // std::cout<<"速度:"<<temp*state_pkg.target_velocity<<"RPM"<<std::endl;
 }
 
+
+void Server_::Pos_target_cb(const boost::shared_ptr<const std_msgs::Float64>& msg){
+    pos_angle_s=msg->data;
+}
+
+// 构造函数，初始化四个服务器
 Servers_::Servers_(ros::NodeHandle nh):server1(nh,1),server2(nh,2),server3(nh,3),server4(nh,4)
 {
-    
+     arm_angle_pub = nh.advertise<linux_serial::arm_angle>("/wjl/arm/real_angle", 10);
 }
 Servers_::~Servers_(){
     
+}
+
+void Servers_::Arm_angle_pub(){
+    linux_serial::arm_angle arm_angle_msg;
+    arm_angle_msg.arm1_angle=server1.pos_angle_r;
+    arm_angle_msg.arm2_angle=server2.pos_angle_r;
+    arm_angle_msg.arm3_angle=server3.pos_angle_r;
+    arm_angle_msg.hand_angle=server4.pos_angle_r;
+    arm_angle_pub.publish(arm_angle_msg);
 }

@@ -26,7 +26,6 @@ int main(int agrc,char *argv[])
 
 
 void Judge_param_load(ros::NodeHandle nh){
-    std::cout<<nh.hasParam("/load_param_flag")<<std::endl;
     while (!nh.hasParam("/load_param_flag"))
   	{
     	ROS_INFO("等待参数加载...");

@@ -35,16 +35,36 @@ void Linux_serial::Send_data(uint8_t *data,int len)
   * @brief 发送所有串口信息
 */
 void Linux_serial::Send_all_data(){
-    // 读取系统参数
-    servers.server1.Read_Sys_Params();
-    // 发送数据
-    Send_data(servers.server1.send_pack,servers.server1.send_len);
-    // 等待0.1秒
+    servers.server1.Read_Sys_Params();// 读取系统参数
+    Send_data(servers.server1.send_pack,servers.server1.send_len);// 发送数据
+    ros::Duration(0.01).sleep();// 等待0.1秒
+    servers.server1.Pos_Control();// 位置控制
+    Send_data(servers.server1.send_pack,servers.server1.send_len);// 发送数据
+
     ros::Duration(0.01).sleep();
-    // 位置控制
-    servers.server1.Pos_Control();
-    // 发送数据
-    Send_data(servers.server1.send_pack,servers.server1.send_len);
+    servers.server2.Read_Sys_Params();
+    Send_data(servers.server2.send_pack,servers.server2.send_len);
+    ros::Duration(0.01).sleep();
+    servers.server2.Pos_Control();
+    Send_data(servers.server2.send_pack,servers.server2.send_len);
+
+    ros::Duration(0.01).sleep();
+    servers.server3.Read_Sys_Params();
+    Send_data(servers.server3.send_pack,servers.server3.send_len);
+    ros::Duration(0.01).sleep();
+    servers.server3.Pos_Control();
+    Send_data(servers.server3.send_pack,servers.server3.send_len);
+
+    ros::Duration(0.01).sleep();
+    servers.server4.Read_Sys_Params();
+    Send_data(servers.server4.send_pack,servers.server4.send_len);
+    ros::Duration(0.01).sleep();
+    servers.server4.Pos_Control();
+    Send_data(servers.server4.send_pack,servers.server4.send_len);
+
+    ros::Duration(0.01).sleep();
+    servers.Arm_angle_pub();// 发布角度
+
 }
 
 
@@ -176,10 +196,10 @@ void Linux_serial::process_rx_data() {
  */
 void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
 {
+    int a=frame.size();
     switch (frame[0])
     {
     case 0x01:
-        int a=frame.size();
         if (a==8 && frame[1]==0x36 && frame[7]==0x6B){
             // // 大端序（高位字节在前）,就这样转换
             // uint32_t angle = ((uint32_t)frame[3] << 24) | 
@@ -228,6 +248,99 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
             // 14. motor_status (1 byte)
             servers.server1.state_pkg.motor_status = frame[idx];\
             servers.server1.State_show();
+        }
+        break;
+    case 0x02:
+        if (a==8 && frame[1]==0x36 && frame[7]==0x6B){
+
+        }else if(a==31 && frame[1]==0x43 && frame[30]==0x6B){
+            size_t idx =4;  // 从 frame[5] 开始
+            servers.server2.state_pkg.bus_voltage = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server2.state_pkg.bus_phase_current = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server2.state_pkg.encoder_value = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server2.state_pkg.direction_tp = frame[idx++];
+            servers.server2. state_pkg.target_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                (frame[idx + 2] << 8) | frame[idx + 3];
+            idx += 4;
+            servers.server2.state_pkg.direction_tv = frame[idx++];
+            servers.server2.state_pkg.target_velocity = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server2.state_pkg.direction_cp = frame[idx++];
+            servers.server2.state_pkg.current_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                (frame[idx + 2] << 8) | frame[idx + 3];
+            idx += 4;
+            servers.server2.state_pkg.direction_pe = frame[idx++];
+            servers.server2.state_pkg.position_error = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                (frame[idx + 2] << 8) | frame[idx + 3];
+            idx += 4;
+            servers.server2.state_pkg.ready_status = frame[idx++];
+            servers.server2.state_pkg.motor_status = frame[idx];\
+            servers.server2.State_show();
+        }
+        break;
+    case 0x03:
+        if (a==8 && frame[1]==0x36 && frame[7]==0x6B){
+
+        }else if(a==31 && frame[1]==0x43 && frame[30]==0x6B){
+            size_t idx =4;  // 从 frame[5] 开始
+            servers.server3.state_pkg.bus_voltage = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server3.state_pkg.bus_phase_current = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server3.state_pkg.encoder_value = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server3.state_pkg.direction_tp = frame[idx++];
+            servers.server3. state_pkg.target_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                (frame[idx + 2] << 8) | frame[idx + 3];
+            idx += 4;
+            servers.server3.state_pkg.direction_tv = frame[idx++];
+            servers.server3.state_pkg.target_velocity = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server3.state_pkg.direction_cp = frame[idx++];
+            servers.server3.state_pkg.current_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                (frame[idx + 2] << 8) | frame[idx + 3];
+            idx += 4;
+            servers.server3.state_pkg.direction_pe = frame[idx++];
+            servers.server3.state_pkg.position_error = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                (frame[idx + 2] << 8) | frame[idx + 3];
+            idx += 4;
+            servers.server3.state_pkg.ready_status = frame[idx++];
+            servers.server3.state_pkg.motor_status = frame[idx];\
+            servers.server3.State_show();
+        }
+        break;
+    case 0x04:
+        if (a==8 && frame[1]==0x36 && frame[7]==0x6B){
+
+        }else if(a==31 && frame[1]==0x43 && frame[30]==0x6B){
+            size_t idx =4;  // 从 frame[5] 开始
+            servers.server4.state_pkg.bus_voltage = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server4.state_pkg.bus_phase_current = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server4.state_pkg.encoder_value = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server4.state_pkg.direction_tp = frame[idx++];
+            servers.server4. state_pkg.target_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                (frame[idx + 2] << 8) | frame[idx + 3];
+            idx += 4;
+            servers.server4.state_pkg.direction_tv = frame[idx++];
+            servers.server4.state_pkg.target_velocity = (frame[idx] << 8) | frame[idx + 1];
+            idx += 2;
+            servers.server4.state_pkg.direction_cp = frame[idx++];
+            servers.server4.state_pkg.current_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                (frame[idx + 2] << 8) | frame[idx + 3];
+            idx += 4;
+            servers.server4.state_pkg.direction_pe = frame[idx++];
+            servers.server4.state_pkg.position_error = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                (frame[idx + 2] << 8) | frame[idx + 3];
+            idx += 4;
+            servers.server4.state_pkg.ready_status = frame[idx++];
+            servers.server4.state_pkg.motor_status = frame[idx];\
+            servers.server4.State_show();
         }
         break;
     }

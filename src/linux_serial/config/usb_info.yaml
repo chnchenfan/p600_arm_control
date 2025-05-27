@@ -3,3 +3,18 @@ load_param_flag: 1
 
 #usb
 arm_usb: /dev/ttyUSB0
+
+# 机械臂角度限制,以DH表为参考，带修改、
+arm:
+  joint1:
+    min: -180
+    max: 180
+  joint2:
+    min: -180
+    max: 0
+  joint3:
+    min: -90
+    max: 90
+  joint4:
+    min: -20
+    max: 25
