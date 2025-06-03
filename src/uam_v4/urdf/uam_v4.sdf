@@ -1,0 +1,454 @@
+<sdf version='1.7'>
+  <model name='uam_v4'>
+    <link name='base_link'>
+      <inertial>
+        <pose>0.009748 -0.000252 0.148636 0 -0 0</pose>
+        <mass>3.48917</mass>
+        <inertia>
+          <ixx>0.043079</ixx>
+          <ixy>-0.00014081</ixy>
+          <ixz>0.00104499</ixz>
+          <iyy>0.049767</iyy>
+          <iyz>0.00015485</iyz>
+          <izz>0.072791</izz>
+        </inertia>
+      </inertial>
+      <collision name='base_link_collision'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/base_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='base_link_visual'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/base_link.STL</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+    <joint name='arm_joint1' type='revolute'>
+      <pose relative_to='base_link'>0.104 0 0.101941 3.14159 -0 0</pose>
+      <parent>base_link</parent>
+      <child>arm_link1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e+16</lower>
+          <upper>1e+16</upper>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='arm_link1'>
+      <pose relative_to='arm_joint1'>0 0 0 0 -0 0</pose>
+      <inertial>
+        <pose>5.4e-05 0.008531 0.039163 0 -0 0</pose>
+        <mass>0.225273</mass>
+        <inertia>
+          <ixx>0.00020971</ixx>
+          <ixy>5e-08</ixy>
+          <ixz>-1.7e-07</ixz>
+          <iyy>0.00019995</iyy>
+          <iyz>-2.66e-05</iyz>
+          <izz>0.0001501</izz>
+        </inertia>
+      </inertial>
+      <collision name='arm_link1_collision'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/arm_link1.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='arm_link1_visual'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/arm_link1.STL</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+    <joint name='arm_joint2' type='revolute'>
+      <pose relative_to='arm_link1'>0 0 0.053 -1.5708 0 0</pose>
+      <parent>arm_link1</parent>
+      <child>arm_link2</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e+16</lower>
+          <upper>1e+16</upper>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='arm_link2'>
+      <pose relative_to='arm_joint2'>0 0 0 0 -0 0</pose>
+      <inertial>
+        <pose>0.089848 0.000668 0.007175 0 -0 0</pose>
+        <mass>0.309499</mass>
+        <inertia>
+          <ixx>0.000171953</ixx>
+          <ixy>-1.08129e-06</ixy>
+          <ixz>-1.35887e-06</ixz>
+          <iyy>0.000606165</iyy>
+          <iyz>-2.14148e-08</iyz>
+          <izz>0.000525417</izz>
+        </inertia>
+      </inertial>
+      <collision name='arm_link2_collision'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/arm_link2.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='arm_link2_fixed_joint_lump__camera_link_collision_1'>
+        <pose>0.09 0.018 0.007 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/camera_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='arm_link2_visual'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/arm_link2.STL</uri>
+          </mesh>
+        </geometry>
+      </visual>
+      <visual name='arm_link2_fixed_joint_lump__camera_link_visual_1'>
+        <pose>0.09 0.018 0.007 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/camera_link.STL</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+    <joint name='left_hand_joint' type='prismatic'>
+      <pose relative_to='arm_link2'>0.18 0.001 -0.0005 0 -0 0</pose>
+      <parent>arm_link2</parent>
+      <child>left_hand_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-0.01</lower>
+          <upper>0.01</upper>
+          <effort>0</effort>
+          <velocity>0</velocity>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='left_hand_link'>
+      <pose relative_to='left_hand_joint'>0 0 0 0 -0 0</pose>
+      <inertial>
+        <pose>0.025824 -0.001 -0.006337 0 -0 0</pose>
+        <mass>0.00272625</mass>
+        <inertia>
+          <ixx>9e-08</ixx>
+          <ixy>0</ixy>
+          <ixz>-1.2e-07</ixz>
+          <iyy>9.2e-07</iyy>
+          <iyz>0</iyz>
+          <izz>8.6e-07</izz>
+        </inertia>
+      </inertial>
+      <collision name='left_hand_link_collision'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/left_hand_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='left_hand_link_visual'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/left_hand_link.STL</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+    <joint name='right_hand_joint' type='prismatic'>
+      <pose relative_to='arm_link2'>0.18 0.001 0.0145 0 -0 0</pose>
+      <parent>arm_link2</parent>
+      <child>right_hand_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-0.01</lower>
+          <upper>0.01</upper>
+          <effort>0</effort>
+          <velocity>0</velocity>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='right_hand_link'>
+      <pose relative_to='right_hand_joint'>0 0 0 0 -0 0</pose>
+      <inertial>
+        <pose>0.025824 -0.001 0.006337 0 -0 0</pose>
+        <mass>0.00272625</mass>
+        <inertia>
+          <ixx>9e-08</ixx>
+          <ixy>0</ixy>
+          <ixz>1.2e-07</ixz>
+          <iyy>9.2e-07</iyy>
+          <iyz>0</iyz>
+          <izz>8.6e-07</izz>
+        </inertia>
+      </inertial>
+      <collision name='right_hand_link_collision'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/right_hand_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='right_hand_link_visual'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/right_hand_link.STL</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+    <joint name='rotor_0_joint' type='revolute'>
+      <pose relative_to='base_link'>0.211684 -0.211684 0.228941 0 -0 0</pose>
+      <parent>base_link</parent>
+      <child>rotor_0</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e+16</lower>
+          <upper>1e+16</upper>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='rotor_0'>
+      <pose relative_to='rotor_0_joint'>0 0 0 0 -0 0</pose>
+      <inertial>
+        <pose>0 0 0.007745 0 -0 0</pose>
+        <mass>0.013</mass>
+        <inertia>
+          <ixx>4.374e-05</ixx>
+          <ixy>-4.7e-07</ixy>
+          <ixz>0</ixz>
+          <iyy>2.6e-07</iyy>
+          <iyz>0</iyz>
+          <izz>4.387e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='rotor_0_collision'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/rotor_0.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='rotor_0_visual'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/rotor_0.STL</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+    <joint name='rotor_1_joint' type='revolute'>
+      <pose relative_to='base_link'>-0.211684 0.211684 0.228941 0 -0 0</pose>
+      <parent>base_link</parent>
+      <child>rotor_1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e+16</lower>
+          <upper>1e+16</upper>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='rotor_1'>
+      <pose relative_to='rotor_1_joint'>0 0 0 0 -0 0</pose>
+      <inertial>
+        <pose>0 0 0.007745 0 -0 0</pose>
+        <mass>0.013</mass>
+        <inertia>
+          <ixx>4.374e-05</ixx>
+          <ixy>-4.7e-07</ixy>
+          <ixz>0</ixz>
+          <iyy>2.6e-07</iyy>
+          <iyz>0</iyz>
+          <izz>4.387e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='rotor_1_collision'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/rotor_1.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='rotor_1_visual'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/rotor_1.STL</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+    <joint name='rotor_2_joint' type='revolute'>
+      <pose relative_to='base_link'>0.211684 0.211684 0.228941 0 -0 0</pose>
+      <parent>base_link</parent>
+      <child>rotor_2</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e+16</lower>
+          <upper>1e+16</upper>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='rotor_2'>
+      <pose relative_to='rotor_2_joint'>0 0 0 0 -0 0</pose>
+      <inertial>
+        <pose>0 0 0.007945 0 -0 0</pose>
+        <mass>0.013</mass>
+        <inertia>
+          <ixx>4.274e-05</ixx>
+          <ixy>4.8e-07</ixy>
+          <ixz>0</ixz>
+          <iyy>2.8e-07</iyy>
+          <iyz>0</iyz>
+          <izz>4.286e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='rotor_2_collision'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/rotor_2.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='rotor_2_visual'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/rotor_2.STL</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+    <joint name='rotor_3_joint' type='revolute'>
+      <pose relative_to='base_link'>-0.211684 -0.211684 0.228941 0 -0 0</pose>
+      <parent>base_link</parent>
+      <child>rotor_3</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e+16</lower>
+          <upper>1e+16</upper>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='rotor_3'>
+      <pose relative_to='rotor_3_joint'>0 0 0 0 -0 0</pose>
+      <inertial>
+        <pose>0 0 0.007945 0 -0 0</pose>
+        <mass>0.013</mass>
+        <inertia>
+          <ixx>4.274e-05</ixx>
+          <ixy>4.8e-07</ixy>
+          <ixz>0</ixz>
+          <iyy>2.8e-07</iyy>
+          <iyz>0</iyz>
+          <izz>4.286e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='rotor_3_collision'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/rotor_3.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='rotor_3_visual'>
+        <pose>0 0 0 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://uam_v4/meshes/rotor_3.STL</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+    <frame name='camera_joint' attached_to='arm_link2'>
+      <pose>0.09 0.018 0.007 0 -0 0</pose>
+    </frame>
+    <frame name='camera_link' attached_to='camera_joint'/>
+  </model>
+</sdf>

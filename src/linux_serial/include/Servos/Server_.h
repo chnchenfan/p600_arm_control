@@ -33,8 +33,7 @@ class Servers_{
 public:
     Server_ server1;
     Server_ server2;
-    Server_ server3;
-    Server_ server4;//作为抓手控制
+    Server_ server3;//作为抓手控制
     Servers_(ros::NodeHandle nh);
     ~Servers_();
     void Arm_angle_pub();

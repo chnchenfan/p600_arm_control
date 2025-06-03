@@ -11,10 +11,7 @@ arm:
     max: 180
   joint2:
     min: -180
-    max: 0
+    max: 10
   joint3:
-    min: -90
-    max: 90
-  joint4:
-    min: -20
+    min: -15
     max: 25

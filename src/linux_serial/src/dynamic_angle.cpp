@@ -25,10 +25,9 @@ public:
     Joint_info joint1;
     Joint_info joint2;
     Joint_info joint3;
-    Joint_info joint4;
     linux_serial::Angle_setConfig config;
     ros::NodeHandle nh;
-    All_joints(ros::NodeHandle nh):joint1(nh,"joint1"),joint2(nh,"joint2"),joint3(nh,"joint3"),joint4(nh,"joint4")
+    All_joints(ros::NodeHandle nh):joint1(nh,"joint1"),joint2(nh,"joint2"),joint3(nh,"joint3")
     {
         this->nh=nh;
     }
@@ -36,21 +35,13 @@ public:
         joint1.current_angle.data=config.joint1_angle;
         joint2.current_angle.data=config.joint2_angle;
         joint3.current_angle.data=config.joint3_angle;
-        joint4.current_angle.data=config.joint4_angle;
         //保证话题发布成功
-        for(int i=0;i<50;i++){
-            joint1.Pub();
-            joint2.Pub();
-            joint3.Pub();
-            joint4.Pub();
-        }
         ros::Rate rate(50);
         int count=0;
         while(ros::ok()){
             joint1.Pub();
             joint2.Pub();
             joint3.Pub();
-            joint4.Pub();
             rate.sleep();
             ros::spinOnce();
             if(count>50){

@@ -1,7 +1,7 @@
 #include "Servos/Server_.h"
 Server_::Server_(ros::NodeHandle nh,uint8_t addr){
     state_pkg.addr_ = addr;
-    if(state_pkg.addr_==4){
+    if(state_pkg.addr_==3){
         multiple_reducer=40;
         direction_rotation=1;
     }else{
@@ -58,18 +58,18 @@ void Server_::Read_Sys_Params(){
   * @retval   地址 + 功能码 + 命令状态 + 校验字节
   */
 void Server_::Pos_Control(){
-    uint16_t vel=100;
+    uint16_t vel=50;
     uint8_t acc=0;
     uint8_t dir=0;
     uint32_t clk=0;
     // 角度限制
+    if(pos_angle_s<pos_angle_min){
+        pos_angle_s=pos_angle_min;
+    }else if(pos_angle_s>pos_angle_max){
+        pos_angle_s=pos_angle_max;
+    }
     double send_pos;
     send_pos=direction_rotation*pos_angle_s;
-    if(send_pos<pos_angle_min){
-        send_pos=pos_angle_min;
-    }else if(send_pos>pos_angle_max){
-        send_pos=pos_angle_max;
-    }
     // 角度转脉冲数
     if(send_pos>=0){
         dir=0;
@@ -143,7 +143,7 @@ void Server_::Pos_target_cb(const boost::shared_ptr<const std_msgs::Float64>& ms
 }
 
 // 构造函数，初始化四个服务器
-Servers_::Servers_(ros::NodeHandle nh):server1(nh,1),server2(nh,2),server3(nh,3),server4(nh,4)
+Servers_::Servers_(ros::NodeHandle nh):server1(nh,1),server2(nh,2),server3(nh,3)
 {
      arm_angle_pub = nh.advertise<linux_serial::arm_angle>("/wjl/arm/real_angle", 10);
 }
@@ -155,7 +155,6 @@ void Servers_::Arm_angle_pub(){
     linux_serial::arm_angle arm_angle_msg;
     arm_angle_msg.arm1_angle=server1.pos_angle_r;
     arm_angle_msg.arm2_angle=server2.pos_angle_r;
-    arm_angle_msg.arm3_angle=server3.pos_angle_r;
-    arm_angle_msg.hand_angle=server4.pos_angle_r;
+    arm_angle_msg.hand_angle=server3.pos_angle_r;
     arm_angle_pub.publish(arm_angle_msg);
 }

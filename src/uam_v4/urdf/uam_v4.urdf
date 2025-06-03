@@ -1,0 +1,538 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="uam_v4">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="0.00974829 -0.00025168 0.14863582"
+        rpy="0 0 0" />
+      <mass
+        value="3.4891734" />
+      <inertia
+        ixx="0.043079"
+        ixy="-0.00014081"
+        ixz="0.00104499"
+        iyy="0.04976704"
+        iyz="0.00015485"
+        izz="0.07279102" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="rotor_0">
+    <inertial>
+      <origin
+        xyz="0 0 0.00774541"
+        rpy="0 0 0" />
+      <mass
+        value="0.013" />
+      <inertia
+        ixx="4.374e-05"
+        ixy="-4.7e-07"
+        ixz="0"
+        iyy="2.6e-07"
+        iyz="0"
+        izz="4.387e-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/rotor_0.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/rotor_0.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_0_joint"
+    type="continuous">
+    <origin
+      xyz="0.211683740803308 -0.211683740803383 0.228940602850063"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_0" />
+    <axis
+      xyz="0 0 1" />
+  </joint>
+  <link
+    name="rotor_1">
+    <inertial>
+      <origin
+        xyz="0 0 0.00774541"
+        rpy="0 0 0" />
+      <mass
+        value="0.013" />
+      <inertia
+        ixx="4.374e-05"
+        ixy="-4.7e-07"
+        ixz="0"
+        iyy="2.6e-07"
+        iyz="0"
+        izz="4.387e-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/rotor_1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/rotor_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_1_joint"
+    type="continuous">
+    <origin
+      xyz="-0.21168374080335 0.211683740803422 0.228940602850063"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_1" />
+    <axis
+      xyz="0 0 1" />
+  </joint>
+  <link
+    name="rotor_2">
+    <inertial>
+      <origin
+        xyz="0 0 0.00794549"
+        rpy="0 0 0" />
+      <mass
+        value="0.013" />
+      <inertia
+        ixx="4.274e-05"
+        ixy="4.8e-07"
+        ixz="0"
+        iyy="2.8e-07"
+        iyz="0"
+        izz="4.286e-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/rotor_2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/rotor_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_2_joint"
+    type="continuous">
+    <origin
+      xyz="0.211683740803408 0.211683740803337 0.228940602850063"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_2" />
+    <axis
+      xyz="0 0 1" />
+  </joint>
+  <link
+    name="rotor_3">
+    <inertial>
+      <origin
+        xyz="0 0 0.00794549"
+        rpy="0 0 0" />
+      <mass
+        value="0.013" />
+      <inertia
+        ixx="4.274e-05"
+        ixy="4.8e-07"
+        ixz="0"
+        iyy="2.8e-07"
+        iyz="0"
+        izz="4.286e-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/rotor_3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/rotor_3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_3_joint"
+    type="continuous">
+    <origin
+      xyz="-0.211683740803383 -0.211683740803297 0.228940602850063"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_3" />
+    <axis
+      xyz="0 0 1" />
+  </joint>
+  <link
+    name="arm_link1">
+    <inertial>
+      <origin
+        xyz="5.432e-05 0.0085306 0.03916253"
+        rpy="0 0 0" />
+      <mass
+        value="0.22527292" />
+      <inertia
+        ixx="0.00020971"
+        ixy="5e-08"
+        ixz="-1.7e-07"
+        iyy="0.00019995"
+        iyz="-2.66e-05"
+        izz="0.0001501" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/arm_link1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/arm_link1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="arm_joint1"
+    type="continuous">
+    <origin
+      xyz="0.103999999999998 0 0.101940602850063"
+      rpy="3.14159265358979 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="arm_link1" />
+    <axis
+      xyz="0 0 1" />
+  </joint>
+  <link
+    name="arm_link2">
+    <inertial>
+      <origin
+        xyz="0.08975405 -3.994e-05 0.00717595"
+        rpy="0 0 0" />
+      <mass
+        value="0.30418087" />
+      <inertia
+        ixx="0.00016138"
+        ixy="1.6e-07"
+        ixz="-1.36e-06"
+        iyy="0.00060537"
+        iyz="-3e-08"
+        izz="0.00051523" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/arm_link2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/arm_link2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="arm_joint2"
+    type="continuous">
+    <origin
+      xyz="0 0 0.0529999999999987"
+      rpy="-1.5707963267949 0 0" />
+    <parent
+      link="arm_link1" />
+    <child
+      link="arm_link2" />
+    <axis
+      xyz="0 0 1" />
+  </joint>
+  <link
+    name="left_hand_link">
+    <inertial>
+      <origin
+        xyz="0.02582393 -0.001  -0.00633685"
+        rpy="0 0 0" />
+      <mass
+        value="0.00272625" />
+      <inertia
+        ixx="9e-08"
+        ixy="0"
+        ixz="-1.2e-07"
+        iyy="9.2e-07"
+        iyz="0"
+        izz="8.6e-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/left_hand_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.0588235294117647 0.705882352941176 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/left_hand_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="left_hand_joint"
+    type="prismatic">
+    <origin
+      xyz="0.18 0.001 -0.0005"
+      rpy="0 0 0" />
+    <parent
+      link="arm_link2" />
+    <child
+      link="left_hand_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.01"
+      upper="0.01"
+      effort="0"
+      velocity="0" />
+    <mimic
+      joint="right_hand_joint"
+      multiplier="-1"
+      offset="0" />
+  </joint>
+  <link
+    name="right_hand_link">
+    <inertial>
+      <origin
+        xyz="0.02582393 -0.001 0.00633685"
+        rpy="0 0 0" />
+      <mass
+        value="0.00272625" />
+      <inertia
+        ixx="9e-08"
+        ixy="0"
+        ixz="1.2e-07"
+        iyy="9.2e-07"
+        iyz="0"
+        izz="8.6e-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/right_hand_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.0588235294117647 0.705882352941176 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/right_hand_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="right_hand_joint"
+    type="prismatic">
+    <origin
+      xyz="0.18 0.001 0.0145"
+      rpy="0 0 0" />
+    <parent
+      link="arm_link2" />
+    <child
+      link="right_hand_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.01"
+      upper="0.01"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="camera_link">
+    <inertial>
+      <origin
+        xyz="0.00519631 0.02313883 0.00013606"
+        rpy="0 0 0" />
+      <mass
+        value="0.0053179" />
+      <inertia
+        ixx="1.71e-06"
+        ixy="-7e-08"
+        ixz="0"
+        iyy="6.4e-07"
+        iyz="0"
+        izz="1.17e-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/camera_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://uam_v4/meshes/camera_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="camera_joint"
+    type="fixed">
+    <origin
+      xyz="0.09 0.018 0.007"
+      rpy="0 0 0" />
+    <parent
+      link="arm_link2" />
+    <child
+      link="camera_link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+</robot>

@@ -16,18 +16,17 @@ class ArmVisualizer:
         
         # Arm parameters
         self.l1 = 0.053
-        self.l2 = 0.135
-        self.l3 = 0.13649
-        self.joint_num = 3
+        self.l2 = 0.21
+        self.joint_num = 2
         self.CoordinatePoints_num = 2 + self.joint_num
         
         # DH parameters
-        self.joints_alpha = [-math.pi/2, 0, 0]
-        self.joints_a = [0, 0.135, 0.13649]
-        self.joints_d = [0.053, 0, 0]
-        self.joints_theta = [0, 0, 0]
-        self.joints_angle_init = [0, -math.pi/2, 0]
-        self.joints_angle = [0, 0, 0]
+        self.joints_alpha = [-math.pi/2, 0]
+        self.joints_a = [0, 0.21]
+        self.joints_d = [0.053, 0.007]
+        self.joints_theta = [0, 0]
+        self.joints_angle_init = [0, -math.pi/2]
+        self.joints_angle = [0, 0]
         
         # Transformation matrices
         self.T_I = np.identity(4)
@@ -59,7 +58,6 @@ class ArmVisualizer:
     def angle_cb(self, msg):
         self.joints_angle[0] = math.radians(msg.arm1_angle)
         self.joints_angle[1] = math.radians(msg.arm2_angle)
-        self.joints_angle[2] = math.radians(msg.arm3_angle)
         math.radians
         self.update_visualization()
 
