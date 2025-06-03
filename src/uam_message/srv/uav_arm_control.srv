@@ -1,0 +1,5 @@
+# 客户端，无人机端arm_start为true,启动时机械臂控制
+bool arm_start
+---
+# 服务器响应,机械臂动作执行完成，uav_start=true,开始无人机飞行部分
+bool uav_start

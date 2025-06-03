@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<launch>
+    <rosparam file="$(find uam_message)/config/usb_info.yaml" command="load" />
+    <rosparam file="$(find uam_message)/config/Pid_set.yaml" command="load" />
+    <node pkg="arm_control" type="serial_" name="serial1"  output="screen"/>
+</launch>

@@ -1,0 +1,19 @@
+model_name0: uav0
+pid_set:
+  arm_joint1_d: 0.10000000000000001
+  arm_joint1_i: 0
+  arm_joint1_p: 10
+  arm_joint2_d: 0.050000000000000003
+  arm_joint2_i: 0
+  arm_joint2_p: 80
+  arm_joint3_d: 0.01
+  arm_joint3_i: 0
+  arm_joint3_p: 10
+  left_hand_joint_d: 0.040000000000000001
+  left_hand_joint_i: 0
+  left_hand_joint_p: 1
+  land_pid_param: 1.0
+Pos_PID:
+  arm_joint1: {P: 10, I: 0, D: 0.10000000000000001}
+  arm_joint2: {P: 80, I: 0, D: 0.050000000000000003}
+  left_hand_joint: {P: 1, I: 0, D: 0.040000000000000001}

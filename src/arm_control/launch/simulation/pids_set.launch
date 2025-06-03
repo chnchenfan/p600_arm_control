@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<launch>
+    <rosparam file="$(find uam_message)/config/Pid_set.yaml" command="load" />
+    <!-- 启动 rqt_gui -->
+    <node name="rqt_gui" pkg="rqt_gui" type="rqt_gui" args="-s rqt_reconfigure" output="screen">
+        <env name="ROS_NAMESPACE" value=""/>
+        <param name="use_sim_time" type="bool" value="false"/>
+    </node>
+
+    <!-- 启动 plotjuggler -->
+    <node name="plotjuggler" pkg="plotjuggler" type="plotjuggler" output="screen">
+        <env name="ROS_NAMESPACE" value=""/>
+        <param name="use_sim_time" type="bool" value="false"/>
+    </node>
+    <node pkg="arm_control" type="pid_set" name="pid_set"   output="screen" />
+</launch>
