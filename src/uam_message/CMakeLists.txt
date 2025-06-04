@@ -60,7 +60,7 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(FILES pid.msg)
 add_message_files(FILES uam_v4_pose.msg)
 add_message_files(FILES arm_angle.msg)
-add_service_files(FILES uav_arm_control.srv)
+# add_service_files(FILES uav_arm_control.srv)
 
 
 generate_messages(DEPENDENCIES std_msgs)
@@ -103,9 +103,8 @@ generate_messages(DEPENDENCIES std_msgs)
 #   cfg/DynReconf1.cfg
 #   cfg/DynReconf2.cfg
 # )
-generate_dynamic_reconfigure_options(
-	cfg/angle_set.cfg		
-  cfg/arm_cmd.cfg		
+generate_dynamic_reconfigure_options(	
+  cfg/uam_cmd.cfg		
   cfg/arm_pid.cfg	
 )
 ###################################

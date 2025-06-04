@@ -19,9 +19,9 @@ pid_set:
 Pos_PID:
   arm_joint1: {P: 10, I: 0, D: 0.01} 
 */
-YAML::Node config = YAML::LoadFile("/home/wjl/p600_arm_control/src/uam_message/config/Pid_set.yaml");
+YAML::Node config = YAML::LoadFile("/home/wjl/p600_arm_control/src/uam_message/config/arm_info_init.yaml");
 void load_YAML(){
-    std::ofstream fout("/home/wjl/p600_arm_control/src/uam_message/config/Pid_set.yaml");
+    std::ofstream fout("/home/wjl/p600_arm_control/src/uam_message/config/arm_info_init.yaml");
     fout << config;
     fout.close();
 }

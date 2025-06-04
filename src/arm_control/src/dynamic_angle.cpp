@@ -1,50 +1,46 @@
 #include <ros/ros.h>
 #include <dynamic_reconfigure/server.h>
-#include <uam_message/Angle_setConfig.h>
+#include <uam_message/uam_cmdConfig.h>
+#include "uam_message/arm_angle.h"//多个电机信息
 #include "std_msgs/Float64.h"
 #include <iostream>
 #include <cstdlib>
 #include <unistd.h>
-//单个电机信息
-class Joint_info
-{
-public:
-    ros::Publisher joint_angle_pub;
-    std::string joint_name;
-    std_msgs::Float64 current_angle;
-    Joint_info(ros::NodeHandle nh,std::string joint_name){
-        this->joint_name=joint_name;
-        this->joint_angle_pub=nh.advertise<std_msgs::Float64>("/wjl/arm/"+joint_name+"/pos_target",10);    
-    }
-    void Pub(){
-        joint_angle_pub.publish(current_angle);
-    }
-};
+#include <geometry_msgs/Point.h>
+#include <std_msgs/Bool.h>
+#include "uav/xyz_yaw_d.h"
 class All_joints{
 public:
-    Joint_info joint1;
-    Joint_info joint2;
-    Joint_info joint3;
-    uam_message::Angle_setConfig config;
+    uam_message::uam_cmdConfig config;
     ros::NodeHandle nh;
-    All_joints(ros::NodeHandle nh):joint1(nh,"joint1"),joint2(nh,"joint2"),joint3(nh,"joint3")
+    uam_message::arm_angle current_angle;
+    ros::Publisher joint_angle_pub;
+    ros::Publisher uav_pos_d_pub;
+    uav::xyz_yaw_d uav_pos_d;
+    All_joints(ros::NodeHandle nh)
     {
         this->nh=nh;
+        this->joint_angle_pub=nh.advertise<uam_message::arm_angle>("/wjl/arm/pos_target",10);
+        this->uav_pos_d_pub=nh.advertise<uav::xyz_yaw_d>("/wjl/guidefly/pose_d",10);
     }
     void Pub(){
-        joint1.current_angle.data=config.joint1_angle;
-        joint2.current_angle.data=config.joint2_angle;
-        joint3.current_angle.data=config.joint3_angle;
+        uav_pos_d.x_d=config.uav_x_d;
+        uav_pos_d.y_d=config.uav_y_d;
+        uav_pos_d.z_d=config.uav_z_d;
+        uav_pos_d.yaw_d=config.uav_yaw_d;
+        uav_pos_d.land_flag=config.land_flag;
+        current_angle.arm1_angle=config.arm_joint1_cmd;
+        current_angle.arm2_angle=config.arm_joint2_cmd;
+        current_angle.hand_angle=config.left_hand_joint_cmd;
         //保证话题发布成功
-        ros::Rate rate(50);
+        ros::Rate rate(60);
         int count=0;
         while(ros::ok()){
-            joint1.Pub();
-            joint2.Pub();
-            joint3.Pub();
+            joint_angle_pub.publish(current_angle);
+            uav_pos_d_pub.publish(uav_pos_d);
             rate.sleep();
             ros::spinOnce();
-            if(count>50){
+            if(count>20){
                 break;
             }
             count++;
@@ -52,7 +48,7 @@ public:
     }
 };
 
-void callback(uam_message::Angle_setConfig &config, uint32_t level,All_joints& All_joints) {
+void callback(uam_message::uam_cmdConfig &config, uint32_t level,All_joints& All_joints) {
     All_joints.config=config;
     All_joints.Pub();
 }
@@ -63,8 +59,8 @@ int main(int argc,char* argv[])
     ros::init(argc,argv,"dynamic_angle");
     ros::NodeHandle nh;
     All_joints all_joints(nh);
-    dynamic_reconfigure::Server<uam_message::Angle_setConfig> server;
-    dynamic_reconfigure::Server<uam_message::Angle_setConfig>::CallbackType f;
+    dynamic_reconfigure::Server<uam_message::uam_cmdConfig> server;
+    dynamic_reconfigure::Server<uam_message::uam_cmdConfig>::CallbackType f;
     f = boost::bind(&callback, _1, _2,boost::ref(all_joints));
     server.setCallback(f);
     ROS_INFO("dynamic_angle is ready");

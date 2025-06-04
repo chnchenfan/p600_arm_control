@@ -8,9 +8,6 @@ Server_::Server_(ros::NodeHandle nh,uint8_t addr){
         multiple_reducer=48;
         direction_rotation=-1;
     }
-    nh.getParam("/arm/joint"+std::to_string(addr)+"/min", pos_angle_min);
-    nh.getParam("/arm/joint"+std::to_string(addr)+"/max", pos_angle_max);
-    pos_angle_sub=nh.subscribe<std_msgs::Float64>("/wjl/arm/joint"+std::to_string(addr)+"/pos_target",10,&Server_::Pos_target_cb,this);
 }
 Server_::~Server_(){
 
@@ -62,12 +59,6 @@ void Server_::Pos_Control(){
     uint8_t acc=0;
     uint8_t dir=0;
     uint32_t clk=0;
-    // 角度限制
-    if(pos_angle_s<pos_angle_min){
-        pos_angle_s=pos_angle_min;
-    }else if(pos_angle_s>pos_angle_max){
-        pos_angle_s=pos_angle_max;
-    }
     double send_pos;
     send_pos=direction_rotation*pos_angle_s;
     // 角度转脉冲数
@@ -138,14 +129,11 @@ void Server_::State_show(){
 }
 
 
-void Server_::Pos_target_cb(const boost::shared_ptr<const std_msgs::Float64>& msg){
-    pos_angle_s=msg->data;
-}
 
-// 构造函数，初始化四个服务器
 Servers_::Servers_(ros::NodeHandle nh):server1(nh,1),server2(nh,2),server3(nh,3)
 {
      arm_angle_pub = nh.advertise<uam_message::arm_angle>("/wjl/arm/real_angle", 10);
+     pos_angle_sub=nh.subscribe<uam_message::arm_angle>("/wjl/arm/real/pos_target",10,&Servers_::Pos_target_cb,this);
 }
 Servers_::~Servers_(){
     
@@ -157,4 +145,10 @@ void Servers_::Arm_angle_pub(){
     arm_angle_msg.arm2_angle=server2.pos_angle_r;
     arm_angle_msg.hand_angle=server3.pos_angle_r;
     arm_angle_pub.publish(arm_angle_msg);
+}
+
+void Servers_::Pos_target_cb(const boost::shared_ptr<const uam_message::arm_angle>& msg){
+    server1.pos_angle_s=msg->arm1_angle;
+    server2.pos_angle_s=msg->arm2_angle;
+    server3.pos_angle_s=msg->hand_angle;
 }

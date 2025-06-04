@@ -69,7 +69,7 @@ find_package(catkin REQUIRED COMPONENTS
 # )
 
 ## Generate added messages and services with any dependencies listed here
-generate_messages(DEPENDENCIES  std_msgs)
+# generate_messages(DEPENDENCIES  std_msgs)
 
 ################################################
 ## Declare ROS dynamic reconfigure parameters ##
@@ -118,6 +118,7 @@ include_directories(
     ${catkin_INCLUDE_DIRS}
     ~/p600_arm_control/devel/include
     ~/p600_arm_control/src/uam_message/include
+    ~/UAV_project/devel/include  #无人机msg消息
 )
 find_library(YAML_CPP_LIB
     NAMES yaml-cpp
@@ -132,6 +133,9 @@ target_link_libraries(dynamic_angle ${catkin_LIBRARIES})
 
 add_executable(pid_set src/pid_set.cpp)
 target_link_libraries(pid_set ${catkin_LIBRARIES} ${YAML_CPP_LIB})
+
+add_executable(motors_simulation src/motors_simulation.cpp src/Servos/Motot_s.cpp)
+target_link_libraries(motors_simulation ${catkin_LIBRARIES})
 #############
 ## Install ##
 #############

@@ -1,3 +1,22 @@
+#判断是否载入该yaml文件
+load_param_arm_flag: 1
+
+#usb
+arm_usb: /dev/ttyUSB0
+
+# 机械臂角度限制,以DH表为参考，带修改、
+arm:
+  arm_joint1:
+    min: -180
+    max: 180
+  arm_joint2:
+    min: -180
+    max: 10
+  left_hand_joint:
+    min: -15
+    max: 25
+
+# 仿真模型机械臂信息
 model_name0: uav0
 pid_set:
   arm_joint1_d: 0.10000000000000001
@@ -6,9 +25,6 @@ pid_set:
   arm_joint2_d: 0.050000000000000003
   arm_joint2_i: 0
   arm_joint2_p: 80
-  arm_joint3_d: 0.01
-  arm_joint3_i: 0
-  arm_joint3_p: 10
   left_hand_joint_d: 0.040000000000000001
   left_hand_joint_i: 0
   left_hand_joint_p: 1
