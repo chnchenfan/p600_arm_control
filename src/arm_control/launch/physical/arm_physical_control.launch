@@ -8,6 +8,6 @@
     </node>
 
     <node pkg="arm_control" type="dynamic_angle" name="dynamic_angle"  output="screen"/>
-    <node pkg="arm_control" type="arm_B_dh.py" name="arm_B_dh"  output="screen"/>
+    <!-- <node pkg="arm_control" type="arm_B_dh.py" name="arm_B_dh"  output="screen"/> -->
     <node pkg="arm_control" type="serial_" name="serial1"  output="screen"/>
 </launch>

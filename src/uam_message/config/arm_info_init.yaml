@@ -2,7 +2,7 @@
 load_param_arm_flag: 1
 
 #usb
-arm_usb: /dev/ttyUSB0
+arm_usb: /dev/right_down
 
 # 机械臂角度限制,以DH表为参考，带修改、
 arm:
