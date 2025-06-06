@@ -4,7 +4,7 @@ workplace_environment_var=~/UAV_project/devel/setup.bash
 gnome-terminal --window -e "bash -c 'cd ~/p600_arm_control/src/arm_control/shell/simulation;bash uam_guidefly.sh; exec bash'" \
 --tab -e "bash -c 'sleep 2;source $workplace_environment_var;roslaunch uav uav_yaml.launch estimator_flag:=w1; exec bash'" \
 --tab -e "bash -c 'sleep 3;source $workplace_environment_var;roslaunch uav uav_drvier_guidefly.launch; exec bash'" \
---tab -e "bash -c 'cd ~/UAV_project/src/uav/config;rosbag record -a -O uav_info; exec bash'" \
+--tab -e "bash -c 'sleep 5;cd ~/p600_arm_control/src/uam_message/config;rosbag record -a -O uam_info; exec bash'" \
 --tab -e "bash -c 'sleep 2.5;
 source $workplace_environment_var;
 export ROS_PACKAGE_PATH=/home/wjl/PX4-Autopilot:\$ROS_PACKAGE_PATH;

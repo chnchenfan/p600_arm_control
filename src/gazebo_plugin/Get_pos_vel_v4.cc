@@ -18,16 +18,15 @@ public:
     Joint_info(){}
     void Init_info(std::string link_name,ros::NodeHandle nh,physics::ModelPtr model){
         this->link_name=link_name;
-        // if(link_name=="arm_link1"){
-        //     nh.getParam("arm_joint1", this->joint_name);
-        // }else if(link_name=="arm_link2"){
-        //     nh.getParam("arm_joint2", this->joint_name);
-        // }else if(link_name=="left_hand_link"){
-        //     nh.getParam("left_hand_joint", this->joint_name);
-        // }else if(link_name=="right_hand_link"){
-        //     nh.getParam("right_hand_joint", this->joint_name);
-        // }
-        nh.getParam(this->link_name+"/joint", this->joint_name);
+        if(link_name=="arm_link1"){
+            this->joint_name="arm_joint1";
+        }else if(link_name=="arm_link2"){
+            this->joint_name="arm_joint2";
+        }else if(link_name=="left_hand_link"){
+            this->joint_name="left_hand_joint";
+        }else if(link_name=="right_hand_link"){
+            this->joint_name="right_hand_joint";
+        }
         this->joint=model->GetJoint(this->joint_name);//获取关节
 
         if (this->joint) {

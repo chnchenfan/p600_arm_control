@@ -27,7 +27,7 @@ public:
     ~Motors_s();
 private:
     ros::Subscriber pos_angle_sub;//订阅电机目标角度
-    ros::Publisher pos_real_pub;//实际，发送server类
+    ros::Publisher pos_real_pub;//实际，发送到server类
     void Pos_target_cb(const boost::shared_ptr<const uam_message::arm_angle>& msg);
 
 };

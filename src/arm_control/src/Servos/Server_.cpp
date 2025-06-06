@@ -132,8 +132,9 @@ void Server_::State_show(){
 
 Servers_::Servers_(ros::NodeHandle nh):server1(nh,1),server2(nh,2),server3(nh,3)
 {
-     arm_angle_pub = nh.advertise<uam_message::arm_angle>("/wjl/arm/real_angle", 10);
-     pos_angle_sub=nh.subscribe<uam_message::arm_angle>("/wjl/arm/real/pos_target",10,&Servers_::Pos_target_cb,this);
+    arm_angle_r_pub = nh.advertise<uam_message::arm_angle>("/wjl/arm/real_angle", 10);
+    arm_angle_error_pub = nh.advertise<uam_message::arm_angle>("/wjl/arm/real_angle_error", 10);
+    pos_angle_sub=nh.subscribe<uam_message::arm_angle>("/wjl/arm/real/pos_target",10,&Servers_::Pos_target_cb,this);
 }
 Servers_::~Servers_(){
     
@@ -144,7 +145,13 @@ void Servers_::Arm_angle_pub(){
     arm_angle_msg.arm1_angle=server1.pos_angle_r;
     arm_angle_msg.arm2_angle=server2.pos_angle_r;
     arm_angle_msg.hand_angle=server3.pos_angle_r;
-    arm_angle_pub.publish(arm_angle_msg);
+    arm_angle_r_pub.publish(arm_angle_msg);
+
+    uam_message::arm_angle arm_angle_error_msg;
+    arm_angle_error_msg.arm1_angle=server1.pos_error;
+    arm_angle_error_msg.arm2_angle=server2.pos_error;
+    arm_angle_error_msg.hand_angle=server3.pos_error;
+    arm_angle_error_pub.publish(arm_angle_error_msg);
 }
 
 void Servers_::Pos_target_cb(const boost::shared_ptr<const uam_message::arm_angle>& msg){

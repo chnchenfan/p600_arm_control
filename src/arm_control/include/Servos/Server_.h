@@ -8,6 +8,7 @@ class Server_{
 public:
     double pos_angle_r;//实际的电机角度
     double pos_angle_s;//期望的电机角度
+    double pos_error;//电机实际位置误差
     State_pkg state_pkg;//电机状态包
     uint8_t send_pack[20];//发送数据包
     int send_len;//发送长度
@@ -18,8 +19,7 @@ public:
     void State_show(); 
 private:
     double pos_angle_t;//电机目标角度,驱动器中获取
-    double vel_r;//电机转速
-    double pos_error;//电机位置误差
+    double vel_r;//电机实际转速
     int multiple_reducer;//减速比,1到3号电机力矩放大48倍
     int direction_rotation;//电机旋转方向,1为正转，-1为反转,加了减速器与电机旋转方向实际相反
 };
@@ -33,8 +33,9 @@ public:
     ~Servers_();
     void Arm_angle_pub();
 private:
-    ros::Publisher arm_angle_pub;//发布电机角度
-    ros::Subscriber pos_angle_sub;//订阅电机目标角度
+    ros::Publisher arm_angle_r_pub;//发布实际电机角度
+    ros::Publisher arm_angle_error_pub;//发布电机角度误差
+    ros::Subscriber pos_angle_sub;//订阅电机目标角度，来自Motor_s类
     void Pos_target_cb(const boost::shared_ptr<const uam_message::arm_angle>& msg);
 };
 
