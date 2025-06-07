@@ -28,8 +28,8 @@ void Motor_s::Pos_gazebo_pub(){
 
 Motors_s::Motors_s(ros::NodeHandle nh):arm1("arm_joint1",nh),arm2("arm_joint2",nh),left_hand("left_hand_joint",nh)
 {
-    pos_angle_sub=nh.subscribe<uam_message::arm_angle>("/wjl/arm/pos_target",10,&Motors_s::Pos_target_cb,this);
-    pos_real_pub=nh.advertise<uam_message::arm_angle>("/wjl/arm/real/pos_target",10);
+    pos_angle_sub=nh.subscribe<uam_message::arm_angle>("/wjl/arm/guidefly/angle_d",10,&Motors_s::Pos_target_cb,this);
+    pos_real_pub=nh.advertise<uam_message::arm_angle>("/wjl/arm/real/angle_d",10);
 }
 Motors_s::~Motors_s(){
     

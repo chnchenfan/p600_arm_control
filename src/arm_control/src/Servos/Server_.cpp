@@ -132,9 +132,9 @@ void Server_::State_show(){
 
 Servers_::Servers_(ros::NodeHandle nh):server1(nh,1),server2(nh,2),server3(nh,3)
 {
-    arm_angle_r_pub = nh.advertise<uam_message::arm_angle>("/wjl/arm/real_angle", 10);
-    arm_angle_error_pub = nh.advertise<uam_message::arm_angle>("/wjl/arm/real_angle_error", 10);
-    pos_angle_sub=nh.subscribe<uam_message::arm_angle>("/wjl/arm/real/pos_target",10,&Servers_::Pos_target_cb,this);
+    arm_angle_r_pub = nh.advertise<uam_message::arm_angle>("/wjl/arm/real/angle_r", 10);
+    arm_angle_error_pub = nh.advertise<uam_message::arm_angle>("/wjl/arm/real/angle_error", 10);
+    pos_angle_sub=nh.subscribe<uam_message::arm_angle>("/wjl/arm/real/angle_d",10,&Servers_::Pos_target_cb,this);
 }
 Servers_::~Servers_(){
     

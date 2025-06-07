@@ -1,4 +1,0 @@
-<?xml version="1.0"?>
-<launch>
-    <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />
-</launch>

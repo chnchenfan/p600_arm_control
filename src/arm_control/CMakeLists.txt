@@ -136,6 +136,9 @@ target_link_libraries(dynamic_angle ${catkin_LIBRARIES})
 
 add_executable(motors_simulation src/motors_simulation.cpp src/Servos/Motot_s.cpp)
 target_link_libraries(motors_simulation ${catkin_LIBRARIES})
+
+add_executable(uam_desired src/uam_desired.cpp)
+target_link_libraries(uam_desired ${catkin_LIBRARIES})
 #############
 ## Install ##
 #############

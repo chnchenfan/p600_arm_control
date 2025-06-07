@@ -20,7 +20,7 @@ public:
     All_joints(ros::NodeHandle nh)
     {
         this->nh=nh;
-        this->joint_angle_pub=nh.advertise<uam_message::arm_angle>("/wjl/arm/pos_target",10);
+        this->joint_angle_pub=nh.advertise<uam_message::arm_angle>("/wjl/arm/guidefly/angle_d",10);
         this->uav_pos_d_pub=nh.advertise<uav::xyz_yaw_d>("/wjl/guidefly/pose_d",10);
     }
     void Pub(){
