@@ -5,8 +5,8 @@ Server_::Server_(ros::NodeHandle nh,uint8_t addr){
         multiple_reducer=40;
         direction_rotation=1;
     }else{
-        multiple_reducer=48;
-        direction_rotation=-1;
+        multiple_reducer=50;
+        direction_rotation=1;
     }
 }
 Server_::~Server_(){
@@ -55,7 +55,7 @@ void Server_::Read_Sys_Params(){
   * @retval   地址 + 功能码 + 命令状态 + 校验字节
   */
 void Server_::Pos_Control(){
-    uint16_t vel=50;
+    uint16_t vel=100;
     uint8_t acc=0;
     uint8_t dir=0;
     uint32_t clk=0;

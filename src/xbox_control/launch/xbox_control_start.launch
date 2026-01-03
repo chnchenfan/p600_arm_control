@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<launch>
+    <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />
+    <node pkg="arm_control" type="serial_" name="serial1"  output="screen"/>
+    <node pkg="arm_control" type="motors_simulation" name="motors_simulation1"  output="screen"/>
+
+
+    <node pkg="xbox_control" type="xbox_control" name="xbox_control1"  output="screen"/>
+    <node pkg="joy" type="joy_node" name="joy_node1"  output="screen"/>
+</launch>
