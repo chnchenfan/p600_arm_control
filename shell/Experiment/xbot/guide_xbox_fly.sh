@@ -6,6 +6,8 @@ gnome-terminal --window -e "bash -c 'roslaunch mavros px4.launch; exec bash'" \
 --tab -e "bash -c 'sleep 7;source ~/fast_lio/devel/setup.bash;roslaunch livox_ros_driver2 msg_MID360.launch; exec bash'" \
 --tab -e "bash -c 'sleep 7;source $workplace_environment_var;roslaunch xbox_control xbox_control_start.launch; exec bash'" \
 --tab -e "bash -c 'sleep 7;rostopic echo /mavros/local_position/pose; exec bash'" \
+--tab -e "bash -c 'sleep 5;cd ~/p600_arm_control/src/uam_message/config;rosbag record -a -O uam_fly_wjl; exec bash'" \
+
 
 
 

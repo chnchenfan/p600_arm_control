@@ -7,3 +7,5 @@ src/uam_message/config/uam_gazebo.bag
 src/uam_message/config/uam_gazebo.bag.active
 src/uam_message/config/uam_mocap.bag
 src/uam_message/config/uam_mocap.bag.active
+src/uam_message/config/uam_fly_wjl.bag.active
+src/uam_message/config/uam_fly_wjl.bag
