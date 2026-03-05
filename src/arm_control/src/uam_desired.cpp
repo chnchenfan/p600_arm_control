@@ -51,37 +51,43 @@ int main(int argc,char* argv[])
     current_angle.arm2_angle=0;
     current_angle.hand_angle=0;
     int num=0;
-    int muti=3;
+    int muti=1;
     while(ros::Time::now()-t_old<ros::Duration(20*muti)){
         ros::Time t_new = ros::Time::now();
         double t=(t_new-t_old).toSec();
-        if(t>1*muti){
-            x=0.2;
+        if(t>5*muti){
+            x=0.5;
         } 
-        if(t<6*muti){
-            y=0;
-        }else if(t>6*muti && t<9*muti){
-            y=1*sin(M_PI*(t/muti-6)/6);
-        }else{
-            y=1;
+        if(t>10*muti){
+            y=0.5;
         }
-        if(t<2*muti){
-            z=0.35+0.65*sin(M_PI*t/muti/4);
-        }else{
-            z=1;
-        }
-        if(t<3*muti){
-            yaw_d=0;
-        }else if(t<5*muti){
-            yaw_d=sin((t/muti-3)*M_PI/4)*90;
-        }else{
-            yaw_d=90;
-        }
-        if(t>10*muti && t<13*muti){
-            current_angle.arm1_angle=30;
-        }else if(t>13*muti && t<20*muti){
-            current_angle.arm2_angle=-30;
-        }
+        // if(t>1*muti){
+        //     x=0.2;
+        // } 
+        // if(t<6*muti){
+        //     y=0;
+        // }else if(t>6*muti && t<9*muti){
+        //     y=1*sin(M_PI*(t/muti-6)/6);
+        // }else{
+        //     y=1;
+        // }
+        // if(t<2*muti){
+        //     z=0.35+0.65*sin(M_PI*t/muti/4);
+        // }else{
+        //     z=1;
+        // }
+        // if(t<3*muti){
+        //     yaw_d=0;
+        // }else if(t<5*muti){
+        //     yaw_d=sin((t/muti-3)*M_PI/4)*90;
+        // }else{
+        //     yaw_d=90;
+        // }
+        // if(t>10*muti && t<13*muti){
+        //     current_angle.arm1_angle=30;
+        // }else if(t>13*muti && t<20*muti){
+        //     current_angle.arm2_angle=-30;
+        // }
         rate.sleep();
         ros::spinOnce(); 
         num++;
