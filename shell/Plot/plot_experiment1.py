@@ -268,6 +268,54 @@ def interp_series(series, target_time):
     return result
 
 
+def detect_landing_cut_index(ref_base, min_consecutive=5):
+    # 自动剔除降落段。
+    #
+    # 当前实验流程里，扰动结束后会把 z 期望从悬停高度切到更低值（例如 1.0 -> 0.5），
+    # 如果直接把这段也算进误差统计，mean/max 会被“主动降落”污染。
+    #
+    # 检测思路：
+    # 1. 用前 80% 参考 z 的中位数估计悬停高度；
+    # 2. 如果后面出现“持续多个采样点都明显低于悬停高度”的段落，
+    #    就认为那里开始进入降落段；
+    # 3. 返回降落开始前的截断索引，用于统一裁掉所有曲线。
+    if ref_base is None or ref_base.shape[0] < max(20, min_consecutive + 2):
+        return ref_base.shape[0] if ref_base is not None else 0
+
+    z_ref = ref_base[:, 2]
+    head_count = max(int(0.8 * z_ref.shape[0]), min_consecutive + 1)
+    hover_z = float(np.median(z_ref[:head_count]))
+
+    # 固定阈值和相对阈值同时考虑：
+    # - 固定值保证对 1m 附近悬停足够敏感
+    # - 相对值保证以后改悬停高度时也不至于完全失效
+    landing_threshold = max(0.15, 0.2 * max(abs(hover_z), 1.0))
+    below_threshold = z_ref < (hover_z - landing_threshold)
+
+    consecutive = 0
+    for index, is_below in enumerate(below_threshold):
+        if is_below:
+            consecutive += 1
+            if consecutive >= min_consecutive:
+                return index - min_consecutive + 1
+        else:
+            consecutive = 0
+
+    return z_ref.shape[0]
+
+
+def trim_arrays(end_index, *arrays):
+    # 将所有已插值好的数组统一裁到同一个有效区间。
+    # 这里用同一个 end_index，是为了保证后续绘图和误差统计仍严格逐点对齐。
+    trimmed = []
+    for array in arrays:
+        if array is None:
+            trimmed.append(None)
+        else:
+            trimmed.append(array[:end_index])
+    return trimmed
+
+
 def dh_matrix(alpha, a, d, theta):
     # 标准 DH 变换矩阵。
     # 后面正运动学会按 link 顺序将这些矩阵逐级相乘。
@@ -587,6 +635,21 @@ def main():
     real_arm = interp_series(bag_data[TOPIC_ARM_REAL], common_time)
     error_arm = interp_series(bag_data[TOPIC_ARM_ERROR], common_time)
     algorithm_base_values = interp_series(algorithm_base, common_time) if algorithm_base is not None else None
+
+    # 自动识别降落段并整体裁掉。
+    # 这样主图和统计量默认只反映“悬停 + 机械臂扰动”阶段，不把最后的主动降落算进去。
+    landing_cut_index = detect_landing_cut_index(ref_base)
+    if 0 < landing_cut_index < common_time.shape[0]:
+        common_time = common_time[:landing_cut_index]
+        vrpn_pose, ref_base, desired_arm, real_arm, error_arm, algorithm_base_values = trim_arrays(
+            landing_cut_index,
+            vrpn_pose,
+            ref_base,
+            desired_arm,
+            real_arm,
+            error_arm,
+            algorithm_base_values,
+        )
 
     # 由关节角离线反推出末端轨迹，这是对齐论文实验一图形表达的关键。
     ee_ref = compute_end_effector(desired_arm)
