@@ -3,6 +3,10 @@
 Linux_serial::Linux_serial(ros::NodeHandle &nh,std::string usb_name):
 sp(iosev, usb_name),servers(nh)
 {
+    nh.param("arm_serial_command_gap", command_gap_sec, command_gap_sec);
+    if (command_gap_sec < 0.0) {
+        command_gap_sec = 0.0;
+    }
     //串口初始化
     sp.set_option(serial_port::baud_rate(115200));
     sp.set_option(serial_port::flow_control(serial_port::flow_control::none));//无流控制
@@ -37,25 +41,25 @@ void Linux_serial::Send_data(uint8_t *data,int len)
 void Linux_serial::Send_all_data(){
     servers.server1.Read_Sys_Params();// 读取系统参数
     Send_data(servers.server1.send_pack,servers.server1.send_len);// 发送数据
-    ros::Duration(0.01).sleep();// 等待0.1秒
+    ros::Duration(command_gap_sec).sleep();
     servers.server1.Pos_Control();// 位置控制
     Send_data(servers.server1.send_pack,servers.server1.send_len);// 发送数据
 
-    ros::Duration(0.01).sleep();
+    ros::Duration(command_gap_sec).sleep();
     servers.server2.Read_Sys_Params();
     Send_data(servers.server2.send_pack,servers.server2.send_len);
-    ros::Duration(0.01).sleep();
+    ros::Duration(command_gap_sec).sleep();
     servers.server2.Pos_Control();
     Send_data(servers.server2.send_pack,servers.server2.send_len);
 
-    ros::Duration(0.01).sleep();
+    ros::Duration(command_gap_sec).sleep();
     servers.server3.Read_Sys_Params();
     Send_data(servers.server3.send_pack,servers.server3.send_len);
-    ros::Duration(0.01).sleep();
+    ros::Duration(command_gap_sec).sleep();
     servers.server3.Pos_Control();
     Send_data(servers.server3.send_pack,servers.server3.send_len);
 
-    ros::Duration(0.01).sleep();
+    ros::Duration(command_gap_sec).sleep();
     servers.Arm_angle_pub();// 发布角度
 
 }

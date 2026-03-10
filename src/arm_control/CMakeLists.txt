@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
   std_msgs
+  uam_message
 )
 
 ## System dependencies are found with CMake's conventions
@@ -102,7 +103,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES arm
-#  CATKIN_DEPENDS message_generation message_runtime roscpp rospy std_msgs
+  CATKIN_DEPENDS dynamic_reconfigure message_runtime roscpp rospy std_msgs uam_message
 #  DEPENDS system_lib
 )
 
@@ -116,28 +117,31 @@ include_directories(
 # include  
     ${PROJECT_SOURCE_DIR}/include
     ${catkin_INCLUDE_DIRS}
-    ~/p600_arm_control/devel/include
-    ~/p600_arm_control/src/uam_message/include
-    ~/UAV_project/devel/include  #无人机msg消息
+    ${CATKIN_DEVEL_PREFIX}/include
+    $ENV{HOME}/UAV_project/devel/include
 )
 find_library(YAML_CPP_LIB
     NAMES yaml-cpp
-    PATHS ~/p600_arm_control/src/uam_message/lib
+    PATHS $ENV{HOME}/p600_arm_control/src/uam_message/lib
     NO_DEFAULT_PATH
 )
 add_executable(serial_ src/arm_real_control.cpp src/Servos/Server_.cpp src/linux_serial/linux_serial.cpp)
+add_dependencies(serial_ ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(serial_ ${catkin_LIBRARIES})
 
 add_executable(dynamic_angle src/dynamic_angle.cpp)
+add_dependencies(dynamic_angle ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(dynamic_angle ${catkin_LIBRARIES})
 
 # add_executable(pid_set src/pid_set.cpp)
 # target_link_libraries(pid_set ${catkin_LIBRARIES} ${YAML_CPP_LIB})
 
 add_executable(motors_simulation src/motors_simulation.cpp src/Servos/Motot_s.cpp)
+add_dependencies(motors_simulation ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(motors_simulation ${catkin_LIBRARIES})
 
 add_executable(uam_desired src/uam_desired.cpp)
+add_dependencies(uam_desired ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(uam_desired ${catkin_LIBRARIES})
 #############
 ## Install ##

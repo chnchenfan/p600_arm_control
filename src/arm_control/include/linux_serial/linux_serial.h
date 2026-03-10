@@ -17,6 +17,7 @@ public:
     void Send_data(uint8_t *data,int len);
     void Send_all_data();
 private:
+    double command_gap_sec = 0.005;
     std::deque<uint8_t> rx_buffer;  // 接收数据缓冲区
     uint8_t read_buf[128];          // 临时读取缓冲区
     std::thread io_thread;         // IO服务线程,这里用了串口异步通讯

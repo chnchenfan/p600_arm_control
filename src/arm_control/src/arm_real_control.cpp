@@ -14,11 +14,15 @@ int main(int agrc,char *argv[])
     ROS_INFO("linux_serial start....");
     std::string usb_name;
     nh.getParam("arm_usb", usb_name);
+    double serial_loop_hz = 15.0;
+    nh.param("arm_serial_loop_hz", serial_loop_hz, serial_loop_hz);
+    if (serial_loop_hz <= 0.0) {
+        serial_loop_hz = 15.0;
+    }
     Linux_serial _serial(nh,usb_name);
-     ros::Rate r(1);
+    ros::Rate r(serial_loop_hz);
     while(ros::ok()){
         r.sleep();
-        ROS_INFO("linux_serial loop....");
         _serial.Send_all_data();
         ros::spinOnce();
     }
@@ -33,5 +37,4 @@ void Judge_param_load(ros::NodeHandle nh){
   	}
     ROS_INFO("加载成功");
 }
-
 
