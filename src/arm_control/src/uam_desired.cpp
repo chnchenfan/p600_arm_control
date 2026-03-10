@@ -22,6 +22,10 @@ double Clamp(double value, double min_value, double max_value) {
     return value;
 }
 
+double DegToRad(double value_deg) {
+    return value_deg * std::acos(-1.0) / 180.0;
+}
+
 const char *StageName(int stage) {
     switch (stage) {
         case 0:
@@ -71,10 +75,15 @@ int main(int argc, char *argv[]) {
     double settle_time = 3.0;
     double experiment_time = 20.0;
     double recovery_time = 2.0;
-    double arm1_hold_deg = 0.0;
+    double arm1_offset_deg = 0.0;
+    double arm1_amp_deg = 6.0;
+    double arm1_period = 3.5;
+    double arm1_phase_deg = 90.0;
+    double arm1_sign = 1.0;
     double arm2_offset_deg = 0.0;
     double arm2_amp_deg = 15.0;
-    double arm2_period = 4.0;
+    double arm2_period = 3.5;
+    double arm2_phase_deg = 0.0;
     double arm2_sign = 1.0;
     double hand_hold_deg = 0.0;
 
@@ -88,16 +97,25 @@ int main(int argc, char *argv[]) {
     pnh.param("settle_time", settle_time, settle_time);
     pnh.param("experiment_time", experiment_time, experiment_time);
     pnh.param("recovery_time", recovery_time, recovery_time);
-    pnh.param("arm1_hold_deg", arm1_hold_deg, arm1_hold_deg);
+    pnh.param("arm1_offset_deg", arm1_offset_deg, arm1_offset_deg);
+    pnh.param("arm1_amp_deg", arm1_amp_deg, arm1_amp_deg);
+    pnh.param("arm1_period", arm1_period, arm1_period);
+    pnh.param("arm1_phase_deg", arm1_phase_deg, arm1_phase_deg);
+    pnh.param("arm1_sign", arm1_sign, arm1_sign);
     pnh.param("arm2_offset_deg", arm2_offset_deg, arm2_offset_deg);
     pnh.param("arm2_amp_deg", arm2_amp_deg, arm2_amp_deg);
     pnh.param("arm2_period", arm2_period, arm2_period);
+    pnh.param("arm2_phase_deg", arm2_phase_deg, arm2_phase_deg);
     pnh.param("arm2_sign", arm2_sign, arm2_sign);
     pnh.param("hand_hold_deg", hand_hold_deg, hand_hold_deg);
 
+    if (arm1_period <= 0.0) {
+        ROS_WARN("参数 arm1_period<=0，已回退为默认值 3.5 s");
+        arm1_period = 3.5;
+    }
     if (arm2_period <= 0.0) {
-        ROS_WARN("参数 arm2_period<=0，已回退为默认值 4.0 s");
-        arm2_period = 4.0;
+        ROS_WARN("参数 arm2_period<=0，已回退为默认值 3.5 s");
+        arm2_period = 3.5;
     }
     if (settle_time < 0.0) {
         settle_time = 0.0;
@@ -122,15 +140,16 @@ int main(int argc, char *argv[]) {
     nh.param("/arm/left_hand_joint/min", hand_min, hand_min);
     nh.param("/arm/left_hand_joint/max", hand_max, hand_max);
 
-    arm1_hold_deg = Clamp(arm1_hold_deg, arm1_min, arm1_max);
+    arm1_offset_deg = Clamp(arm1_offset_deg, arm1_min, arm1_max);
     arm2_offset_deg = Clamp(arm2_offset_deg, arm2_min, arm2_max);
     hand_hold_deg = Clamp(hand_hold_deg, hand_min, hand_max);
 
     ROS_INFO("服务已经启动，等待实验触发....");
     ROS_INFO(
-        "uam_desired params: hover=(%.2f, %.2f, %.2f), yaw=%.2f deg, settle=%.2f s, exp=%.2f s, recovery=%.2f s, arm2_amp=%.2f deg, arm2_period=%.2f s, arm2_sign=%.2f",
+        "uam_desired params: hover=(%.2f, %.2f, %.2f), yaw=%.2f deg, settle=%.2f s, exp=%.2f s, recovery=%.2f s, arm1=(offset %.2f, amp %.2f, T %.2f, phase %.2f), arm2=(offset %.2f, amp %.2f, T %.2f, phase %.2f)",
         hover_x, hover_y, hover_z, hover_yaw_deg, settle_time, experiment_time, recovery_time,
-        arm2_amp_deg, arm2_period, arm2_sign);
+        arm1_offset_deg, arm1_amp_deg, arm1_period, arm1_phase_deg, arm2_offset_deg,
+        arm2_amp_deg, arm2_period, arm2_phase_deg);
 
     ros::Rate rate(30.0);
     while (ros::ok() && !start_flag) {
@@ -150,12 +169,14 @@ int main(int argc, char *argv[]) {
     uav_pos_d.z_d = hover_z;
     uav_pos_d.yaw_d = hover_yaw_deg;
     uav_pos_d.land_flag = false;
-    current_angle.arm1_angle = arm1_hold_deg;
+    current_angle.arm1_angle = arm1_offset_deg;
     current_angle.arm2_angle = arm2_offset_deg;
     current_angle.hand_angle = hand_hold_deg;
 
     const ros::Duration landing_publish_time(0.5);
     const double two_pi = 2.0 * std::acos(-1.0);
+    const double arm1_phase_rad = DegToRad(arm1_phase_deg);
+    const double arm2_phase_rad = DegToRad(arm2_phase_deg);
     const ros::Time experiment_start = ros::Time::now();
     ros::Time last_log_time = experiment_start - ros::Duration(1.0);
 
@@ -169,23 +190,28 @@ int main(int argc, char *argv[]) {
         if (elapsed < settle_time) {
             stage = 0;
             uav_pos_d.land_flag = false;
-            current_angle.arm1_angle = arm1_hold_deg;
+            current_angle.arm1_angle = arm1_offset_deg;
             current_angle.arm2_angle = arm2_offset_deg;
             current_angle.hand_angle = hand_hold_deg;
         } else if (elapsed < settle_time + experiment_time) {
             stage = 1;
             const double disturb_time = elapsed - settle_time;
+            const double arm1_cmd =
+                arm1_offset_deg +
+                arm1_sign * arm1_amp_deg *
+                    std::sin(two_pi * disturb_time / arm1_period + arm1_phase_rad);
             const double arm2_cmd =
                 arm2_offset_deg +
-                arm2_sign * arm2_amp_deg * std::sin(two_pi * disturb_time / arm2_period);
+                arm2_sign * arm2_amp_deg *
+                    std::sin(two_pi * disturb_time / arm2_period + arm2_phase_rad);
             uav_pos_d.land_flag = false;
-            current_angle.arm1_angle = arm1_hold_deg;
+            current_angle.arm1_angle = arm1_cmd;
             current_angle.arm2_angle = arm2_cmd;
             current_angle.hand_angle = hand_hold_deg;
         } else if (elapsed < settle_time + experiment_time + recovery_time) {
             stage = 2;
             uav_pos_d.land_flag = false;
-            current_angle.arm1_angle = arm1_hold_deg;
+            current_angle.arm1_angle = arm1_offset_deg;
             current_angle.arm2_angle = arm2_offset_deg;
             current_angle.hand_angle = hand_hold_deg;
         } else if (elapsed < settle_time + experiment_time + recovery_time +
@@ -193,7 +219,7 @@ int main(int argc, char *argv[]) {
             stage = 3;
             uav_pos_d.z_d = 0.5;
             uav_pos_d.land_flag = true;
-            current_angle.arm1_angle = arm1_hold_deg;
+            current_angle.arm1_angle = arm1_offset_deg;
             current_angle.arm2_angle = arm2_offset_deg;
             current_angle.hand_angle = hand_hold_deg;
         } else {
