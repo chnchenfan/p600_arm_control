@@ -530,8 +530,18 @@ def save_joint_diagnostics(output_dir, common_time, desired_arm, real_arm, error
 
 
 def save_base_error_summary(output_dir, common_time, ref_base, px4_base, algo_base):
-    # 这张图比主图更工程化，便于单独看每个坐标轴误差和误差范数，
-    # 尤其适合复现实验后快速比较不同参数组。
+    # 这张图现在改成“实际位置对期望位置的跟踪情况”。
+    # 这样与论文中的跟踪曲线表达更一致，也更适合你后续直接观察
+    # x/y/z 三个方向到底是“整体漂了”，还是“在跟随但有偏差”。
+    #
+    # 图结构固定为 4 行：
+    # 1. x 实际 vs 参考
+    # 2. y 实际 vs 参考
+    # 3. z 实际 vs 参考
+    # 4. 位置误差范数
+    #
+    # 若未来补充算法 CSV，只在第 4 行叠加算法误差范数，
+    # 不再把算法占位塞进前三个跟踪图，避免主信息被稀释。
     figure, axes = plt.subplots(4, 1, figsize=(10, 11), sharex=True)
     axis_colors = ["#1f77b4", "#ff7f0e", "#2ca02c"]
     axis_names = ["x", "y", "z"]
@@ -545,22 +555,20 @@ def save_base_error_summary(output_dir, common_time, ref_base, px4_base, algo_ba
     for axis_index, axis_name in enumerate(axis_names):
         axes[axis_index].plot(
             common_time,
-            px4_diff[:, axis_index],
+            ref_base[:, axis_index],
+            color=axis_colors[axis_index],
+            linewidth=1.2,
+            linestyle=":",
+            label="ref %s" % axis_name,
+        )
+        axes[axis_index].plot(
+            common_time,
+            px4_base[:, axis_index],
             color=axis_colors[axis_index],
             linewidth=1.8,
-            label="PX4 %s error" % axis_name,
+            label="PX4 %s" % axis_name,
         )
-        if algo_diff is not None:
-            axes[axis_index].plot(
-                common_time,
-                algo_diff[:, axis_index],
-                color=axis_colors[axis_index],
-                linewidth=1.4,
-                linestyle="--",
-                label="Algo %s error" % axis_name,
-            )
-        axes[axis_index].axhline(0.0, color="0.35", linewidth=1.0, linestyle=":")
-        axes[axis_index].set_ylabel("%s err (m)" % axis_name)
+        axes[axis_index].set_ylabel("%s (m)" % axis_name)
         axes[axis_index].legend(loc="best", frameon=False)
         style_axis(axes[axis_index])
 
@@ -586,8 +594,9 @@ def save_base_error_summary(output_dir, common_time, ref_base, px4_base, algo_ba
         fontsize=9,
         bbox=dict(boxstyle="round", facecolor="white", edgecolor="0.8", alpha=0.9),
     )
-    axes[3].set_ylabel("norm (m)")
+    axes[3].set_ylabel("error norm (m)")
     axes[3].set_xlabel("Time (s)")
+    axes[3].set_title("Base position tracking summary")
     axes[3].legend(loc="best", frameon=False)
     style_axis(axes[3])
 
