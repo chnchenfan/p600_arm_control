@@ -9,6 +9,7 @@ project(arm_control)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
   dynamic_reconfigure
+  geometry_msgs
   message_generation
   message_runtime
   roscpp
@@ -103,7 +104,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES arm
-  CATKIN_DEPENDS dynamic_reconfigure message_runtime roscpp rospy std_msgs uam_message
+  CATKIN_DEPENDS dynamic_reconfigure geometry_msgs message_runtime roscpp rospy std_msgs uam_message
 #  DEPENDS system_lib
 )
 
@@ -119,6 +120,7 @@ include_directories(
     ${catkin_INCLUDE_DIRS}
     ${CATKIN_DEVEL_PREFIX}/include
     $ENV{HOME}/UAV_project/devel/include
+    ${PROJECT_SOURCE_DIR}/../../../UAV_project/devel/include
 )
 find_library(YAML_CPP_LIB
     NAMES yaml-cpp
@@ -143,6 +145,10 @@ target_link_libraries(motors_simulation ${catkin_LIBRARIES})
 add_executable(uam_desired src/uam_desired.cpp)
 add_dependencies(uam_desired ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(uam_desired ${catkin_LIBRARIES})
+
+add_executable(uam_desired_exp2 src/uam_desired_exp2.cpp)
+add_dependencies(uam_desired_exp2 ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(uam_desired_exp2 ${catkin_LIBRARIES})
 #############
 ## Install ##
 #############

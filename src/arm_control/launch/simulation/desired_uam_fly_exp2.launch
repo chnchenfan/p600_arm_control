@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<launch>
+    <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />
+    <node pkg="arm_control" type="motors_simulation" name="motors_simulation" output="screen" />
+    <node pkg="arm_control" type="uam_desired_exp2" name="uam_desired_exp2" output="screen" />
+</launch>
