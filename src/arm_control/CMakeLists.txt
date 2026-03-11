@@ -149,6 +149,10 @@ target_link_libraries(uam_desired ${catkin_LIBRARIES})
 add_executable(uam_desired_exp2 src/uam_desired_exp2.cpp)
 add_dependencies(uam_desired_exp2 ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(uam_desired_exp2 ${catkin_LIBRARIES})
+
+add_executable(uam_desired_exp3 src/uam_desired_exp3.cpp)
+add_dependencies(uam_desired_exp3 ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(uam_desired_exp3 ${catkin_LIBRARIES})
 #############
 ## Install ##
 #############
