@@ -10,6 +10,7 @@ project(arm_control)
 find_package(catkin REQUIRED COMPONENTS
   dynamic_reconfigure
   geometry_msgs
+  mavros_msgs
   message_generation
   message_runtime
   roscpp
@@ -104,7 +105,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES arm
-  CATKIN_DEPENDS dynamic_reconfigure geometry_msgs message_runtime roscpp rospy std_msgs uam_message
+  CATKIN_DEPENDS dynamic_reconfigure geometry_msgs mavros_msgs message_runtime roscpp rospy std_msgs uam_message
 #  DEPENDS system_lib
 )
 

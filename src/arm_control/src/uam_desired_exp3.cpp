@@ -5,6 +5,7 @@
 #include <string>
 
 #include <geometry_msgs/PoseStamped.h>
+#include <mavros_msgs/State.h>
 
 #include "uam_message/arm_angle.h"
 #include "uav/desired_start.h"
@@ -28,6 +29,16 @@ struct BasePoseState {
 };
 
 BasePoseState g_base_pose;
+BasePoseState g_vrpn_pose;
+
+struct MavrosStateCache {
+    bool valid = false;
+    bool connected = false;
+    bool armed = false;
+    std::string mode;
+};
+
+MavrosStateCache g_mavros_state;
 
 // 通用限幅函数。
 // 一方面用于参数回退后的保护，另一方面用于最终关节命令限幅。
@@ -57,6 +68,10 @@ const char *StageName(int stage) {
             return "recovery";
         case 3:
             return "landing";
+        case 4:
+            return "safety_hold";
+        case 5:
+            return "safety_landing";
         default:
             return "unknown";
     }
@@ -84,6 +99,27 @@ void BasePoseCb(const geometry_msgs::PoseStamped::ConstPtr &msg) {
     g_base_pose.z = msg->pose.position.z;
 }
 
+// 缓存动捕真值。
+// 实验三新增的保护逻辑会比较：
+// 1. 动捕真值 vs mavros/local_position
+// 2. 动捕真值 vs 当前期望位置
+// 一旦偏差持续超阈值，就中止正方形主段，先把机械臂收回。
+void VrpnPoseCb(const geometry_msgs::PoseStamped::ConstPtr &msg) {
+    g_vrpn_pose.valid = true;
+    g_vrpn_pose.x = msg->pose.position.x;
+    g_vrpn_pose.y = msg->pose.position.y;
+    g_vrpn_pose.z = msg->pose.position.z;
+}
+
+// 缓存 MAVROS 当前状态。
+// 这里默认只把 connected/armed/mode 记录下来，并将 connected 作为一条保护依据。
+void MavrosStateCb(const mavros_msgs::State::ConstPtr &msg) {
+    g_mavros_state.valid = true;
+    g_mavros_state.connected = msg->connected;
+    g_mavros_state.armed = msg->armed;
+    g_mavros_state.mode = msg->mode;
+}
+
 // 线性插值函数。
 // 实验三的基座轨迹是“分段线性正方形”，每条边都由这个函数在起点和终点之间插值生成。
 double InterpolateSegment(double start_value, double end_value, double ratio) {
@@ -105,6 +141,10 @@ int main(int argc, char *argv[]) {
     ros::ServiceServer server = nh.advertiseService("/wjl/start/uav_desired", doReq);
     ros::Subscriber base_pose_sub =
         nh.subscribe<geometry_msgs::PoseStamped>("/mavros/local_position/pose", 10, BasePoseCb);
+    ros::Subscriber vrpn_pose_sub =
+        nh.subscribe<geometry_msgs::PoseStamped>("/vrpn_client_node/Tracker0/pose", 10, VrpnPoseCb);
+    ros::Subscriber mavros_state_sub =
+        nh.subscribe<mavros_msgs::State>("/mavros/state", 10, MavrosStateCb);
 
     // ----------------------------
     // 实验三参数区
@@ -134,6 +174,13 @@ int main(int argc, char *argv[]) {
     double arm2_phase_deg = 0.0;
     double arm2_sign = 1.0;
     double hand_hold_deg = 0.0;
+    bool enable_protection = true;
+    bool protection_auto_land = false;
+    double max_pose_disagreement = 0.6;
+    double max_tracking_error = 1.0;
+    double max_altitude_drop = 0.3;
+    int protection_trigger_cycles = 10;
+    double protection_hold_time = 2.0;
 
     // hover_z:
     //   起飞完成后以及整个实验三主段中的目标高度。
@@ -162,6 +209,24 @@ int main(int argc, char *argv[]) {
     //
     // arm*_phase_deg:
     //   两个关节之间的相位差。实验三默认复用实验一的双关节相位配置。
+    //
+    // enable_protection:
+    //   是否启用实验三保护逻辑。
+    //
+    // max_pose_disagreement:
+    //   动捕真值与 mavros/local_position 的最大允许偏差。
+    //
+    // max_tracking_error:
+    //   动捕真值与当前期望位置的最大允许偏差。
+    //
+    // max_altitude_drop:
+    //   相对 hover_z 的最大允许掉高。
+    //
+    // protection_trigger_cycles:
+    //   连续超阈值多少个控制周期后触发保护，避免单帧噪声误触发。
+    //
+    // protection_auto_land:
+    //   默认关闭，保护触发后先保持悬停，让现场人工判断是否继续降落。
     nh.param("/wjl/uam/hover_z", hover_z, hover_z);
     pnh.param("hover_z", hover_z, hover_z);
     pnh.param("hover_yaw_deg", hover_yaw_deg, hover_yaw_deg);
@@ -180,6 +245,13 @@ int main(int argc, char *argv[]) {
     pnh.param("arm2_phase_deg", arm2_phase_deg, arm2_phase_deg);
     pnh.param("arm2_sign", arm2_sign, arm2_sign);
     pnh.param("hand_hold_deg", hand_hold_deg, hand_hold_deg);
+    pnh.param("enable_protection", enable_protection, enable_protection);
+    pnh.param("protection_auto_land", protection_auto_land, protection_auto_land);
+    pnh.param("max_pose_disagreement", max_pose_disagreement, max_pose_disagreement);
+    pnh.param("max_tracking_error", max_tracking_error, max_tracking_error);
+    pnh.param("max_altitude_drop", max_altitude_drop, max_altitude_drop);
+    pnh.param("protection_trigger_cycles", protection_trigger_cycles, protection_trigger_cycles);
+    pnh.param("protection_hold_time", protection_hold_time, protection_hold_time);
 
     // 参数保护：
     // 实验节点启动时优先做简单回退，避免无效参数直接把轨迹公式搞坏。
@@ -194,6 +266,21 @@ int main(int argc, char *argv[]) {
     }
     if (recovery_time < 0.0) {
         recovery_time = 0.0;
+    }
+    if (max_pose_disagreement <= 0.0) {
+        max_pose_disagreement = 0.6;
+    }
+    if (max_tracking_error <= 0.0) {
+        max_tracking_error = 1.0;
+    }
+    if (max_altitude_drop <= 0.0) {
+        max_altitude_drop = 0.3;
+    }
+    if (protection_trigger_cycles < 1) {
+        protection_trigger_cycles = 1;
+    }
+    if (protection_hold_time < 0.0) {
+        protection_hold_time = 0.0;
     }
     if (arm1_period <= 0.0) {
         arm1_period = 3.5;
@@ -236,6 +323,11 @@ int main(int argc, char *argv[]) {
         hover_z, hover_yaw_deg, square_side_length, edge_time, settle_time, recovery_time,
         arm1_offset_deg, arm1_amp_deg, arm1_period, arm1_phase_deg, arm2_offset_deg,
         arm2_amp_deg, arm2_period, arm2_phase_deg);
+    ROS_INFO(
+        "exp3 protection: enable=%s, auto_land=%s, pose_gap<=%.2f m, track_err<=%.2f m, max_drop<=%.2f m, trigger_cycles=%d, hold_time=%.2f s",
+        enable_protection ? "true" : "false", protection_auto_land ? "true" : "false",
+        max_pose_disagreement, max_tracking_error, max_altitude_drop, protection_trigger_cycles,
+        protection_hold_time);
 
     ros::Rate rate(30.0);
     while (ros::ok() && !start_flag) {
@@ -264,6 +356,13 @@ int main(int argc, char *argv[]) {
     bool square_origin_initialized = false;
     double square_origin_x = 0.0;
     double square_origin_y = 0.0;
+    bool protection_triggered = false;
+    ros::Time protection_start_time;
+    int protection_violation_count = 0;
+    double last_pose_disagreement = 0.0;
+    double last_tracking_error = 0.0;
+    double last_altitude_drop = 0.0;
+    uav::xyz_yaw_d last_safe_uav_pos_d = uav_pos_d;
 
     const ros::Time experiment_start = ros::Time::now();
     ros::Time last_log_time = experiment_start - ros::Duration(1.0);
@@ -289,7 +388,20 @@ int main(int argc, char *argv[]) {
         //
         // 3. landing:
         //    发布 z_d=0.5 和 land_flag=true，交给 UAV 侧已有逻辑收尾。
-        if (elapsed < settle_time) {
+        //
+        // 4. safety_hold:
+        //    保护触发后停止继续走方形，保持最后一个安全 setpoint，并把机械臂收回。
+        //
+        // 5. safety_landing:
+        //    仅在 protection_auto_land=true 时启用，保护保持一段时间后触发降落。
+        if (protection_triggered) {
+            const double protection_elapsed = (now - protection_start_time).toSec();
+            if (protection_auto_land &&
+                protection_elapsed >= protection_hold_time + landing_publish_time.toSec()) {
+                break;
+            }
+            stage = protection_auto_land && protection_elapsed >= protection_hold_time ? 5 : 4;
+        } else if (elapsed < settle_time) {
             stage = 0;
         } else if (elapsed < settle_time + square_motion_time) {
             stage = 1;
@@ -403,6 +515,78 @@ int main(int argc, char *argv[]) {
             uav_pos_d.y_d = square_origin_y;
             uav_pos_d.z_d = 0.5;
             uav_pos_d.land_flag = true;
+        } else if (stage == 4) {
+            // 保护保持段：
+            // 基座停在最近一次确认“还算安全”的 setpoint，
+            // 机械臂全部回 offset，避免继续给飞机叠加扰动。
+            uav_pos_d = last_safe_uav_pos_d;
+        } else if (stage == 5) {
+            uav_pos_d = last_safe_uav_pos_d;
+            uav_pos_d.z_d = 0.5;
+            uav_pos_d.land_flag = true;
+        }
+
+        // ----------------------------
+        // 实验三保护逻辑
+        // ----------------------------
+        // 这部分的目标不是“修复飞控”，而是在已明显异常时尽快停掉任务主段。
+        // 当前保护默认看 4 类信号：
+        // 1. 动捕真值与 MAVROS 估计的偏差
+        // 2. 动捕真值与当前期望位置的偏差
+        // 3. 动捕真值相对 hover_z 的掉高
+        // 4. mavros/state 是否仍然 connected
+        if (!protection_triggered && enable_protection && stage <= 2) {
+            bool violation = false;
+
+            if (g_vrpn_pose.valid && g_base_pose.valid) {
+                const double dx = g_vrpn_pose.x - g_base_pose.x;
+                const double dy = g_vrpn_pose.y - g_base_pose.y;
+                const double dz = g_vrpn_pose.z - g_base_pose.z;
+                last_pose_disagreement = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (last_pose_disagreement > max_pose_disagreement) {
+                    violation = true;
+                }
+            }
+
+            if (g_vrpn_pose.valid) {
+                const double dx = g_vrpn_pose.x - uav_pos_d.x_d;
+                const double dy = g_vrpn_pose.y - uav_pos_d.y_d;
+                const double dz = g_vrpn_pose.z - uav_pos_d.z_d;
+                last_tracking_error = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (last_tracking_error > max_tracking_error) {
+                    violation = true;
+                }
+
+                last_altitude_drop = hover_z - g_vrpn_pose.z;
+                if (last_altitude_drop > max_altitude_drop) {
+                    violation = true;
+                }
+            }
+
+            if (g_mavros_state.valid && !g_mavros_state.connected) {
+                violation = true;
+            }
+
+            if (violation) {
+                protection_violation_count++;
+            } else {
+                protection_violation_count = 0;
+                last_safe_uav_pos_d = uav_pos_d;
+            }
+
+            if (protection_violation_count >= protection_trigger_cycles) {
+                protection_triggered = true;
+                protection_start_time = now;
+                uav_pos_d = last_safe_uav_pos_d;
+                current_angle.arm1_angle = arm1_offset_deg;
+                current_angle.arm2_angle = arm2_offset_deg;
+                current_angle.hand_angle = hand_hold_deg;
+                ROS_ERROR(
+                    "exp3 protection triggered: pose_gap=%.3f m, track_err=%.3f m, altitude_drop=%.3f m, mavros_connected=%s, mode=%s",
+                    last_pose_disagreement, last_tracking_error, last_altitude_drop,
+                    g_mavros_state.connected ? "true" : "false",
+                    g_mavros_state.mode.c_str());
+            }
         }
 
         // 最终发送前统一按 YAML 限位，避免参数调整过头时把机械臂打到不可接受区域。
@@ -422,6 +606,13 @@ int main(int argc, char *argv[]) {
                 uav_pos_d.yaw_d, current_angle.arm1_angle, current_angle.arm2_angle,
                 current_angle.hand_angle, square_origin_x, square_origin_y,
                 g_base_pose.valid ? "true" : "false", uav_pos_d.land_flag ? "true" : "false");
+            if (enable_protection) {
+                ROS_INFO(
+                    "exp3 protection monitor: pose_gap=%.3f m, track_err=%.3f m, altitude_drop=%.3f m, count=%d, vrpn_valid=%s, mavros_connected=%s, mode=%s",
+                    last_pose_disagreement, last_tracking_error, last_altitude_drop,
+                    protection_violation_count, g_vrpn_pose.valid ? "true" : "false",
+                    g_mavros_state.connected ? "true" : "false", g_mavros_state.mode.c_str());
+            }
         }
 
         uav_pos_d_pub.publish(uav_pos_d);
