@@ -9,13 +9,13 @@ import os
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Merge experiment 3 topic CSV files into one readable monitor CSV."
+        description="Merge experiment 3 topic CSV files into one readable monitor log."
     )
     parser.add_argument("--desired-csv", required=True, help="CSV exported from /wjl/guidefly/pose_d")
     parser.add_argument("--vrpn-csv", required=True, help="CSV exported from /vrpn_client_node/Tracker0/pose")
     parser.add_argument("--mavros-csv", required=True, help="CSV exported from /mavros/local_position/pose")
     parser.add_argument("--state-csv", required=True, help="CSV exported from /mavros/state")
-    parser.add_argument("--output", required=True, help="Readable merged CSV output path")
+    parser.add_argument("--output", required=True, help="Readable merged log output path")
     return parser.parse_args()
 
 
@@ -122,7 +122,7 @@ def write_merged_csv(desired_rows, vrpn_rows, mavros_rows, state_rows, output_pa
         set([row["t"] for row in desired_rows + vrpn_rows + mavros_rows + state_rows])
     )
     if not all_times:
-        raise RuntimeError("No monitor CSV rows found to merge.")
+        raise RuntimeError("No monitor topic rows found to merge.")
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -216,7 +216,7 @@ def main():
     mavros_rows = load_topic_csv(args.mavros_csv, "mavros")
     state_rows = load_topic_csv(args.state_csv, "state")
     write_merged_csv(desired_rows, vrpn_rows, mavros_rows, state_rows, args.output)
-    print("Merged experiment 3 monitor CSV written to %s" % args.output)
+    print("Merged experiment 3 monitor log written to %s" % args.output)
 
 
 if __name__ == "__main__":

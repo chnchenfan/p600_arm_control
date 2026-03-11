@@ -27,7 +27,7 @@ TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 OUTPUT_DIR="$HOME/p600_arm_control/data/experiment3/$TIMESTAMP"
 BAG_PATH="$OUTPUT_DIR/experiment3_px4.bag"
 META_PATH="$OUTPUT_DIR/metadata.txt"
-MONITOR_PATH="$OUTPUT_DIR/experiment3_monitor.csv"
+MONITOR_PATH="$OUTPUT_DIR/experiment3_monitor.log"
 MONITOR_SCRIPT="$HOME/p600_arm_control/shell/Experiment/record_experiment3_monitor.py"
 MONITOR_TMP_DIR="$OUTPUT_DIR/monitor_tmp"
 DESIRED_TMP="$MONITOR_TMP_DIR/pose_d.csv"
@@ -55,12 +55,12 @@ experiment_mode=$EXPERIMENT_MODE
 arm_branch=$ARM_BRANCH
 uav_branch=$UAV_BRANCH
 bag_path=$BAG_PATH
-monitor_csv=$MONITOR_PATH
+monitor_log=$MONITOR_PATH
 EOF
 
 echo "Experiment 3 record output: $OUTPUT_DIR"
 echo "Metadata saved to: $META_PATH"
-echo "Readable monitor CSV: $MONITOR_PATH"
+echo "Readable monitor log: $MONITOR_PATH"
 echo "Press Ctrl-C to stop rosbag recording."
 
 PYTHON_BIN="python3"
@@ -95,7 +95,7 @@ if [ -f "$MONITOR_SCRIPT" ] && command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   MONITOR_PIDS="$MONITOR_PIDS $!"
   rostopic echo -p /mavros/state > "$STATE_TMP" &
   MONITOR_PIDS="$MONITOR_PIDS $!"
-  echo "Readable monitor CSV temp capture started."
+  echo "Readable monitor log temp capture started."
 else
   echo "Readable monitor logger not started: missing $MONITOR_SCRIPT or python interpreter"
 fi
