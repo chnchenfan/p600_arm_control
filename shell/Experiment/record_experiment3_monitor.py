@@ -6,6 +6,8 @@ import csv
 import math
 import os
 
+import rosbag
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -15,6 +17,7 @@ def parse_args():
     parser.add_argument("--vrpn-csv", required=True, help="CSV exported from /vrpn_client_node/Tracker0/pose")
     parser.add_argument("--mavros-csv", required=True, help="CSV exported from /mavros/local_position/pose")
     parser.add_argument("--state-csv", required=True, help="CSV exported from /mavros/state")
+    parser.add_argument("--bag", default="", help="Optional rosbag path for fallback topic extraction")
     parser.add_argument("--output", required=True, help="Readable merged log output path")
     return parser.parse_args()
 
@@ -98,6 +101,26 @@ def load_topic_csv(path, kind):
                         ),
                     }
                 )
+    return rows
+
+
+def load_desired_from_bag(bag_path):
+    rows = []
+    if not bag_path or not os.path.isfile(bag_path):
+        return rows
+
+    with rosbag.Bag(bag_path, "r") as bag:
+        for _, msg, t in bag.read_messages(topics=["/wjl/guidefly/pose_d"]):
+            rows.append(
+                {
+                    "t": t.to_sec() * 1e9,
+                    "desired_x": float(msg.x_d),
+                    "desired_y": float(msg.y_d),
+                    "desired_z": float(msg.z_d),
+                    "desired_yaw": float(msg.yaw_d),
+                    "desired_land": "true" if bool(msg.land_flag) else "false",
+                }
+            )
     return rows
 
 
@@ -212,6 +235,8 @@ def write_merged_csv(desired_rows, vrpn_rows, mavros_rows, state_rows, output_pa
 def main():
     args = parse_args()
     desired_rows = load_topic_csv(args.desired_csv, "desired")
+    if not desired_rows:
+        desired_rows = load_desired_from_bag(args.bag)
     vrpn_rows = load_topic_csv(args.vrpn_csv, "vrpn")
     mavros_rows = load_topic_csv(args.mavros_csv, "mavros")
     state_rows = load_topic_csv(args.state_csv, "state")

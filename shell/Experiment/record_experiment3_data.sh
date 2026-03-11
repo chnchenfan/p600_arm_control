@@ -12,14 +12,14 @@ if [ -f "$ROS_SETUP" ]; then
   source "$ROS_SETUP"
 fi
 
-if [ -f "$HOME/UAV_project/devel/setup.bash" ]; then
-  # shellcheck disable=SC1090
-  source "$HOME/UAV_project/devel/setup.bash"
-fi
-
 if [ -f "$HOME/p600_arm_control/devel/setup.bash" ]; then
   # shellcheck disable=SC1090
   source "$HOME/p600_arm_control/devel/setup.bash"
+fi
+
+if [ -f "$HOME/UAV_project/devel/setup.bash" ]; then
+  # shellcheck disable=SC1090
+  source "$HOME/UAV_project/devel/setup.bash"
 fi
 
 EXPERIMENT_MODE="${1:-exp3_square_motion}"
@@ -81,6 +81,7 @@ cleanup() {
       --vrpn-csv "$VRPN_TMP" \
       --mavros-csv "$MAVROS_TMP" \
       --state-csv "$STATE_TMP" \
+      --bag "$BAG_PATH" \
       --output "$MONITOR_PATH" >/dev/null 2>&1 || true
   fi
 }
