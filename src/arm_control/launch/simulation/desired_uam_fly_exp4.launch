@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<launch>
+    <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />
+    <node pkg="arm_control" type="motors_simulation" name="motors_simulation" output="screen" />
+    <node pkg="arm_control" type="uam_desired_exp4" name="uam_desired_exp4" output="screen">
+        <param name="hover_z" value="1.0" />
+        <param name="hover_yaw_deg" value="0.0" />
+        <param name="settle_time" value="3.0" />
+        <param name="recovery_time" value="3.0" />
+        <param name="landing_z" value="0.5" />
+        <param name="approach_time" value="3.0" />
+        <param name="pass_time" value="2.0" />
+        <param name="depart_time" value="3.0" />
+        <param name="ee_nominal_x" value="0.18" />
+        <param name="ee_nominal_y" value="0.0" />
+        <param name="ee_nominal_z" value="0.06" />
+        <param name="ring_pose_timeout_sec" value="0.3" />
+        <param name="ring_loss_limit" value="10" />
+        <param name="ik_fail_limit" value="10" />
+        <param name="base_step_limit_xy" value="0.03" />
+        <param name="base_step_limit_z" value="0.02" />
+        <param name="hand_hold_deg" value="25.0" />
+        <rosparam param="ring_names">[ring1, ring2, ring3, ring4]</rosparam>
+        <rosparam param="final_hover_offset_xyz">[-0.30, 0.0, 0.0]</rosparam>
+        <rosparam param="rings/ring1/approach_offset_xyz">[0.20, 0.0, 0.0]</rosparam>
+        <rosparam param="rings/ring1/depart_offset_xyz">[-0.20, 0.0, 0.0]</rosparam>
+        <rosparam param="rings/ring2/approach_offset_xyz">[0.20, 0.0, 0.0]</rosparam>
+        <rosparam param="rings/ring2/depart_offset_xyz">[-0.20, 0.0, 0.0]</rosparam>
+        <rosparam param="rings/ring3/approach_offset_xyz">[0.20, 0.0, 0.0]</rosparam>
+        <rosparam param="rings/ring3/depart_offset_xyz">[-0.20, 0.0, 0.0]</rosparam>
+        <rosparam param="rings/ring4/approach_offset_xyz">[0.20, 0.0, 0.0]</rosparam>
+        <rosparam param="rings/ring4/depart_offset_xyz">[-0.20, 0.0, 0.0]</rosparam>
+    </node>
+</launch>
