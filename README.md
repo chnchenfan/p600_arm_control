@@ -251,11 +251,13 @@ GitHub: <https://github.com/chnchenfan/p600_arm_control>
 - 录包: `shell/Experiment/record_experiment1_data.sh`
 - 绘图: `shell/Plot/plot_experiment1.py`
 
-### 实验 2: 基座画圆 + 末端固定点补偿
+### 实验 2: `arm_base/arm_target` 全姿态末端定点补偿
 
 目标:
-- 无人机在世界系按小圆轨迹运动
-- 机械臂通过在线逆解补偿，使末端尽量固定在世界系某一点
+- 无人机在 `x-z` 平面按圆弧参考运动
+- `arm_base` 提供机械臂基座在动捕世界系下的完整位姿
+- `arm_target` 提供末端工作点在动捕世界系下的实测位置
+- 机械臂通过 2DoF 在线逆解与末端位置外环补偿，使末端尽量固定在世界系某一点
 
 主要入口:
 - 控制节点: `src/arm_control/src/uam_desired_exp2.cpp`

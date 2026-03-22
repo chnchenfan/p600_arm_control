@@ -1,6 +1,84 @@
 <?xml version="1.0"?>
 <launch>
+    <!-- 机械臂初始参数：沿用现有机械臂模型和关节限位配置 -->
     <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />
+
+    <!-- 电机/舵机仿真节点：保持与其他实验一致 -->
     <node pkg="arm_control" type="motors_simulation" name="motors_simulation" output="screen" />
-    <node pkg="arm_control" type="uam_desired_exp2" name="uam_desired_exp2" output="screen" />
+
+    <!--
+        实验二控制节点说明：
+        1. arm_base：动捕世界系下的机械臂基座刚体位姿，是任务层几何主输入；
+        2. arm_target：动捕世界系下的末端工作点刚体位姿，用于冻结 P_hold 和做末端误差外环；
+        3. local_pose：PX4/MAVROS 的本地位姿估计，仅用于把 world 系参考映射到飞控输出系；
+        4. 主段轨迹：无人机在 x-z 平面做圆弧前馈，机械臂用 2DoF IK + 末端位置 P 外环补偿。
+    -->
+    <node pkg="arm_control" type="uam_desired_exp2" name="uam_desired_exp2" output="screen">
+        <!-- 输入话题 -->
+        <param name="base_pose_topic" value="/vrpn_client_node/arm_base/pose" />
+        <param name="ee_pose_topic" value="/vrpn_client_node/arm_target/pose" />
+        <param name="local_pose_topic" value="/mavros/local_position/pose" />
+
+        <!-- 机械臂几何参数：L1 为基座到肩关节中心的竖直偏置，L2 为肩关节到末端工作点的长度 -->
+        <param name="L1_m" value="0.161" />
+        <param name="L2_m" value="0.262" />
+
+        <!-- 主段圆弧参数：theta 在 [-10, 45] 度间往返变化，驱动 UAV 在 x-z 平面运动 -->
+        <param name="theta_min_deg" value="-10.0" />
+        <param name="theta_max_deg" value="45.0" />
+        <param name="theta_period_sec" value="10.0" />
+
+        <!-- 状态机时间：稳定段 / 主段 / 恢复段 -->
+        <param name="settle_time" value="3.0" />
+        <param name="experiment_time" value="20.0" />
+        <param name="recovery_time" value="2.0" />
+
+        <!-- UAV 朝向与降落收尾高度 -->
+        <param name="hover_yaw_deg" value="0.0" />
+        <param name="landing_z" value="0.5" />
+
+        <!--
+            输出坐标映射：
+            true  表示把动捕 world 系下算出的 pose_d 平移映射到 PX4 local 系输出；
+            false 表示直接把动捕 world 系位置作为输出。
+        -->
+        <param name="use_local_pose_mapping" value="true" />
+
+        <!--
+            固定点来源：
+            true  表示在 settle 结束后，用 arm_target 若干帧均值冻结 P_hold；
+            false 表示使用 exp2_hold_ee_x/y/z 显式给定固定点。
+        -->
+        <param name="use_initial_ee_hold" value="true" />
+        <param name="hold_freeze_samples" value="5" />
+        <param name="exp2_hold_ee_x" value="0.0" />
+        <param name="exp2_hold_ee_y" value="0.0" />
+        <param name="exp2_hold_ee_z" value="0.0" />
+
+        <!-- 末端位置外环：Kp 为比例增益，clip 为每周期修正量限幅 -->
+        <param name="ee_outer_kp" value="0.25" />
+        <param name="ee_outer_clip_m" value="0.03" />
+
+        <!--
+            在线零位标定：
+            settle 段根据 arm_base/arm_target 的实测几何关系，估计 arm1/arm2 的本次飞行零位偏置；
+            若在线估计失败，则退回 arm1_zero_offset_deg / arm2_zero_offset_deg 这两个默认值。
+        -->
+        <param name="use_online_joint_calibration" value="true" />
+        <param name="online_calibration_samples" value="20" />
+        <param name="calibration_max_offset_deg" value="20.0" />
+        <param name="arm1_zero_offset_deg" value="0.0" />
+        <param name="arm2_zero_offset_deg" value="0.0" />
+
+        <!-- 动捕与 IK 保护参数 -->
+        <param name="pose_timeout_sec" value="0.3" />
+        <param name="eps_r_m" value="0.01" />
+        <param name="eps_xy_m" value="0.015" />
+        <param name="ik_fail_limit" value="10" />
+        <param name="pose_loss_limit" value="10" />
+
+        <!-- 关节速度限幅，单位 deg/s -->
+        <param name="arm1_dot_max_deg_s" value="90.0" />
+        <param name="arm2_dot_max_deg_s" value="90.0" />
+    </node>
 </launch>

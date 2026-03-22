@@ -10,7 +10,7 @@
 - `motors_simulation`: simulated arm actuator bridge
 - `dynamic_angle`: manual arm/UAV reference publisher
 - `uam_desired`: experiment 1 reference generator
-- `uam_desired_exp2`: experiment 2 reference generator
+- `uam_desired_exp2`: experiment 2 reference generator with `arm_base/arm_target` full-pose compensation
 - `uam_desired_exp3`: experiment 3 reference generator
 - `uam_desired_exp4`: experiment 4 reference generator
 
@@ -38,10 +38,11 @@ Published:
 
 Consumed:
 
+- `/vrpn_client_node/arm_base/pose`
+- `/vrpn_client_node/arm_target/pose`
 - `/mavros/local_position/pose`
 - `/mavros/state`
 - `/wjl/arm/real/angle_r`
-- `/vrpn_client_node/Tracker0/pose`
 - `/vrpn_client_node/ring1/pose` to `/vrpn_client_node/ring4/pose` in experiment 4
 
 Service:
@@ -96,10 +97,11 @@ This package is the task layer for the UAV-arm experiments. It computes arm and 
 
 订阅:
 
+- `/vrpn_client_node/arm_base/pose`
+- `/vrpn_client_node/arm_target/pose`
 - `/mavros/local_position/pose`
 - `/mavros/state`
 - `/wjl/arm/real/angle_r`
-- `/vrpn_client_node/Tracker0/pose`
 - 实验四中的 `/vrpn_client_node/ring1/pose` 到 `/vrpn_client_node/ring4/pose`
 
 服务:

@@ -22,7 +22,7 @@ if [ -f "$HOME/p600_arm_control/devel/setup.bash" ]; then
   source "$HOME/p600_arm_control/devel/setup.bash"
 fi
 
-EXPERIMENT_MODE="${1:-exp2_circle_hold}"
+EXPERIMENT_MODE="${1:-exp2_arc_hold}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 OUTPUT_DIR="$HOME/p600_arm_control/data/experiment2/$TIMESTAMP"
 BAG_PATH="$OUTPUT_DIR/experiment2_px4.bag"
@@ -41,23 +41,28 @@ if git -C "$HOME/UAV_project" rev-parse --is-inside-work-tree >/dev/null 2>&1; t
   UAV_BRANCH="$(git -C "$HOME/UAV_project" branch --show-current 2>/dev/null || echo unknown)"
 fi
 
-cat > "$META_PATH" <<EOF
+cat > "$META_PATH" <<META
 timestamp=$TIMESTAMP
 experiment_mode=$EXPERIMENT_MODE
 arm_branch=$ARM_BRANCH
 uav_branch=$UAV_BRANCH
 bag_path=$BAG_PATH
-EOF
+base_pose_topic=/vrpn_client_node/arm_base/pose
+ee_pose_topic=/vrpn_client_node/arm_target/pose
+local_pose_topic=/mavros/local_position/pose
+META
 
 echo "Experiment 2 record output: $OUTPUT_DIR"
 echo "Metadata saved to: $META_PATH"
 echo "Press Ctrl-C to stop rosbag recording."
 
 rosbag record -O "$BAG_PATH" \
-  /vrpn_client_node/Tracker0/pose \
+  /vrpn_client_node/arm_base/pose \
+  /vrpn_client_node/arm_target/pose \
   /mavros/local_position/pose \
   /mavros/setpoint_raw/local \
   /wjl/guidefly/pose_d \
   /wjl/arm/guidefly/angle_d \
+  /wjl/arm/guidefly/online_offset \
   /wjl/arm/real/angle_r \
   /wjl/arm/real/angle_error
