@@ -218,7 +218,10 @@ GitHub: <https://github.com/chnchenfan/p600_arm_control>
 
 - `/mavros/local_position/pose`: 无人机基座实际位姿
 - `/mavros/state`: 飞控连接与模式状态
-- `/vrpn_client_node/Tracker0/pose`: 基座动捕真值
+- 动捕基座源按实验切换：
+  - 实验 1 / 3: `/vrpn_client_node/Tracker0/pose`
+  - 实验 2: `/vrpn_client_node/arm_base/pose`
+  - 实验 4: `/vrpn_client_node/arm_target/pose`
 - `/wjl/arm/real/angle_r`: 机械臂实际角
 - 实验四额外使用 `/vrpn_client_node/ring1/pose` 到 `/vrpn_client_node/ring4/pose`
 
@@ -301,6 +304,27 @@ GitHub: <https://github.com/chnchenfan/p600_arm_control>
 - `/vrpn_client_node/ring2/pose`
 - `/vrpn_client_node/ring3/pose`
 - `/vrpn_client_node/ring4/pose`
+
+## 真机启动顺序
+
+统一顺序不变：
+
+1. 启动动捕和 PX4
+2. 启动对应实验的录包脚本
+3. 启动对应实验的控制脚本
+
+统一动捕入口：
+
+- 实验 1: `bash shell/Experiment/uam_mocap.sh exp1`
+- 实验 2: `bash shell/Experiment/uam_mocap.sh exp2`
+- 实验 3: `bash shell/Experiment/uam_mocap.sh exp3`
+- 实验 4: `bash shell/Experiment/uam_mocap.sh exp4`
+
+这样会自动选择对应刚体：
+
+- `exp1` / `exp3` -> `Tracker0`
+- `exp2` -> `arm_base`
+- `exp4` -> `arm_target`
 
 ## 常用入口
 

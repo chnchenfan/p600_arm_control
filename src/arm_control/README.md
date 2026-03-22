@@ -97,12 +97,12 @@ This package is the task layer for the UAV-arm experiments. It computes arm and 
 
 订阅:
 
-- `/vrpn_client_node/arm_base/pose`
-- `/vrpn_client_node/arm_target/pose`
 - `/mavros/local_position/pose`
 - `/mavros/state`
 - `/wjl/arm/real/angle_r`
-- 实验四中的 `/vrpn_client_node/ring1/pose` 到 `/vrpn_client_node/ring4/pose`
+- 实验 2 使用 `/vrpn_client_node/arm_base/pose` 与 `/vrpn_client_node/arm_target/pose`
+- 实验 1 / 3 的动捕基座源默认是 `/vrpn_client_node/Tracker0/pose`
+- 实验 4 的飞控动捕基座源默认是 `/vrpn_client_node/arm_target/pose`，同时还使用 `/vrpn_client_node/ring1/pose` 到 `/vrpn_client_node/ring4/pose`
 
 服务:
 
@@ -117,3 +117,18 @@ This package is the task layer for the UAV-arm experiments. It computes arm and 
 - 真机实验时与 `UAV_project` 配合使用
 - Gazebo 仿真时通过 `motors_simulation` 使用
 - 用于实验 1 到实验 4，以及 `dynamic_angle` 手工调试
+
+### 真机动捕启动
+
+`p600_arm_control` 侧统一通过 `shell/Experiment/uam_mocap.sh` 启动动捕与 PX4：
+
+- `bash shell/Experiment/uam_mocap.sh exp1`
+- `bash shell/Experiment/uam_mocap.sh exp2`
+- `bash shell/Experiment/uam_mocap.sh exp3`
+- `bash shell/Experiment/uam_mocap.sh exp4`
+
+其中：
+
+- `exp1` / `exp3` 选择 `Tracker0`
+- `exp2` 选择 `arm_base`
+- `exp4` 选择 `arm_target`
