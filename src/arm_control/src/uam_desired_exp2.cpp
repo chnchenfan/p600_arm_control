@@ -195,6 +195,14 @@ Vec3 RotateBodyToWorld(const Vec3 &vector_body, const PoseState &pose) {
     };
 }
 
+// arm_base 动捕刚体原点不一定与真实机械臂基座原点重合。
+// 若刚体原点位于真实基座 x 正方向前方 dx，则真实基座世界坐标应为：
+//   p_base_true^W = p_rb^W - R_WB * [dx, 0, 0]^T
+// 这里的 dx 以“刚体系 x 正方向前方”为正，代码内部统一做减法。
+Vec3 GetCorrectedBaseWorldPosition(const PoseState &base_pose, double arm_base_offset_x_m) {
+    return SubVec3(base_pose.position, RotateBodyToWorld({arm_base_offset_x_m, 0.0, 0.0}, base_pose));
+}
+
 // 世界系 -> 机体系 的逆旋转。
 // 实验二主逻辑要把固定点从动捕世界系变换到机械臂基座系，就是用这一步。
 Vec3 RotateWorldToBody(const Vec3 &vector_world, const PoseState &pose) {
@@ -432,6 +440,7 @@ int main(int argc, char *argv[]) {
     double explicit_hold_x = 0.0;
     double explicit_hold_y = 0.0;
     double explicit_hold_z = 0.0;
+    double arm_base_offset_x_m = 0.0;
     std::string base_pose_topic = "/vrpn_client_node/arm_base/pose";
     std::string ee_pose_topic = "/vrpn_client_node/arm_target/pose";
     std::string local_pose_topic = "/mavros/local_position/pose";
@@ -466,6 +475,7 @@ int main(int argc, char *argv[]) {
     pnh.param("exp2_hold_ee_x", explicit_hold_x, explicit_hold_x);
     pnh.param("exp2_hold_ee_y", explicit_hold_y, explicit_hold_y);
     pnh.param("exp2_hold_ee_z", explicit_hold_z, explicit_hold_z);
+    pnh.param("arm_base_offset_x_m", arm_base_offset_x_m, arm_base_offset_x_m);
     pnh.param("base_pose_topic", base_pose_topic, base_pose_topic);
     pnh.param("ee_pose_topic", ee_pose_topic, ee_pose_topic);
     pnh.param("local_pose_topic", local_pose_topic, local_pose_topic);
@@ -598,7 +608,7 @@ int main(int argc, char *argv[]) {
     bool force_recovery = false;
     double last_valid_arm1_deg = current_angle.arm1_angle;
     double last_valid_arm2_deg = current_angle.arm2_angle;
-    Vec3 last_uav_world_command = g_base_pose.valid ? g_base_pose.position : Vec3{0.0, 0.0, 0.0};
+    Vec3 last_uav_world_command = g_base_pose.valid ? GetCorrectedBaseWorldPosition(g_base_pose, arm_base_offset_x_m) : Vec3{0.0, 0.0, 0.0};
     Vec3 recovery_start_world = last_uav_world_command;
     double recovery_start_arm1_deg = last_valid_arm1_deg;
     double recovery_start_arm2_deg = last_valid_arm2_deg;
@@ -666,6 +676,7 @@ int main(int argc, char *argv[]) {
         const bool base_fresh = IsPoseFresh(g_base_pose, now, pose_timeout_sec); // true = 数据新鲜，没有超时
         const bool ee_fresh = IsPoseFresh(g_ee_pose, now, pose_timeout_sec);
         const bool local_fresh = IsPoseFresh(g_local_pose, now, pose_timeout_sec);
+        const Vec3 base_world_position = GetCorrectedBaseWorldPosition(g_base_pose, arm_base_offset_x_m);
 
         if (stage == 0) {
             // 稳定段：
@@ -673,7 +684,7 @@ int main(int argc, char *argv[]) {
             // 2. 尽量使用关节实测作为初值，避免刚进入实验二就突跳
             // 3. 若 base pose 已经可用，则先把当前基座位置发给 UAV 侧保持悬停
             if (g_base_pose.valid) {// 如果接受到消息/消息存在，valid=true表示接受到新一帧的消息
-                last_uav_world_command = g_base_pose.position;// 把arm_base的信息记为最后/上一帧
+                last_uav_world_command = base_world_position;// 把修正后的真实基座位置记为最后/上一帧
             }
             if (g_real_arm_state.valid) {// 角度限幅与存储
                 last_valid_arm1_deg = Clamp(g_real_arm_state.arm1_deg, arm1_min, arm1_max);
@@ -688,7 +699,7 @@ int main(int argc, char *argv[]) {
             // 2. 与当前关节实测角做差，得到装配零位偏置样本；
             // 3. 对若干帧样本求均值，得到本次飞行的 arm1/arm2 零位补偿。
             if (use_online_joint_calibration && !joint_offset_initialized && base_fresh && ee_fresh && g_real_arm_state.valid) {
-                const Vec3 ee_offset_world = SubVec3(g_ee_pose.position, g_base_pose.position);// PE_W - PB_W
+                const Vec3 ee_offset_world = SubVec3(g_ee_pose.position, base_world_position);// PE_W - PB_W
                 const Vec3 ee_body = RotateWorldToBody(ee_offset_world, g_base_pose);// PE_B = RB_W(PE_W - PB_W)
                 const Vec3 p_rel_meas = SubVec3(ee_body, Vec3{0.0, 0.0, -l1_m});// PE_S = PE_B - PS_B
                 const double radius = NormVec3(p_rel_meas);// 求解PE_S模长
@@ -731,7 +742,7 @@ int main(int argc, char *argv[]) {
             if (base_fresh) {
                 uav_pos_d.land_flag = false;// 降落标志位，设置为不降落
                 const Vec3 output_position = // 保持当前悬停位置
-                    MapWorldToOutputFrame(g_base_pose.position, use_local_pose_mapping, frame_mapping_initialized,
+                    MapWorldToOutputFrame(base_world_position, use_local_pose_mapping, frame_mapping_initialized,
                                           hover_anchor_world, local_anchor);
                 uav_pos_d.x_d = output_position.x;
                 uav_pos_d.y_d = output_position.y;
@@ -770,7 +781,7 @@ int main(int argc, char *argv[]) {
                     // 在主段刚开始时用 arm_target 的若干帧均值冻结末端固定点，
                     // 这样不需要手工提前给一个世界坐标。
                     if (!hover_anchor_initialized) {
-                        hover_anchor_world = g_base_pose.position;// 把当前基坐标系记为圆弧轨迹起点
+                        hover_anchor_world = base_world_position;// 把修正后的真实基座位置记为圆弧轨迹起点
                         hover_anchor_initialized = true;
                     }
                     if (use_local_pose_mapping && local_fresh && !frame_mapping_initialized) {
@@ -791,7 +802,7 @@ int main(int argc, char *argv[]) {
                     ee_hold_initialized = true;
                     ee_hold_world = {explicit_hold_x, explicit_hold_y, explicit_hold_z};
                     if (!hover_anchor_initialized && base_fresh) {
-                        hover_anchor_world = g_base_pose.position;
+                        hover_anchor_world = base_world_position;
                         hover_anchor_initialized = true;
                     }
                     if (use_local_pose_mapping && local_fresh && !frame_mapping_initialized) {
@@ -805,7 +816,7 @@ int main(int argc, char *argv[]) {
 
             // 保护机制，如果前面冻结失败，这里再冻结一次
             if (!hover_anchor_initialized && base_fresh) {
-                hover_anchor_world = g_base_pose.position;
+                hover_anchor_world = base_world_position;
                 hover_anchor_initialized = true;
             }
             if (use_local_pose_mapping && local_fresh && !frame_mapping_initialized && hover_anchor_initialized) {
@@ -825,7 +836,7 @@ int main(int argc, char *argv[]) {
                 std::sin(theta_phase_offset + two_pi * stage_time / theta_period_sec);
             const double theta_rad = DegToRad(theta_deg);// 转为弧度制
             // 保护机制，如果主段参考轨迹设置了圆弧位置起点，则采用设置的；如果没有，则采用现在的
-            Vec3 desired_world = hover_anchor_initialized ? hover_anchor_world : g_base_pose.position;
+            Vec3 desired_world = hover_anchor_initialized ? hover_anchor_world : base_world_position;
             desired_world.x = desired_world.x + l2_m * (1.0 - std::cos(theta_rad));// x_d = x0 + L2 (1 - cos theta)
             desired_world.y = hover_anchor_initialized ? hover_anchor_world.y : desired_world.y;// y_d = y0
             desired_world.z = desired_world.z - l2_m * std::sin(theta_rad); // z_d = z0 - L2 sin theta
@@ -855,7 +866,7 @@ int main(int argc, char *argv[]) {
             } else {
                 pose_loss_count = 0;
 
-                const Vec3 hold_offset_world = SubVec3(ee_hold_world, g_base_pose.position);// PE_W - PB_W
+                const Vec3 hold_offset_world = SubVec3(ee_hold_world, base_world_position);// PE_W - PB_W
                 Vec3 p_hold_body = RotateWorldToBody(hold_offset_world, g_base_pose);// PE_B = RB_W(PE_W - PB_W)
                 Vec3 p_rel = SubVec3(p_hold_body, Vec3{0.0, 0.0, -l1_m});// PE_S = PE_B - PS_B
 
@@ -961,11 +972,11 @@ int main(int argc, char *argv[]) {
             const double ee_error_norm =
                 (ee_hold_initialized && g_ee_pose.valid) ? NormVec3(SubVec3(ee_hold_world, g_ee_pose.position)) : -1.0;
             ROS_INFO(
-                "[%s] t=%.2f s, pose_d=(%.2f, %.2f, %.2f, %.2f), arm_d=(%.2f, %.2f, %.2f), base_fresh=%s, ee_fresh=%s, ee_err=%.4f, pose_loss=%d, ik_fail=%d, offset=(%.2f, %.2f)",
+                "[%s] t=%.2f s, pose_d=(%.2f, %.2f, %.2f, %.2f), arm_d=(%.2f, %.2f, %.2f), base_fresh=%s, ee_fresh=%s, ee_err=%.4f, pose_loss=%d, ik_fail=%d, offset=(%.2f, %.2f), base_dx=%.4f",
                 StageName(stage), elapsed, uav_pos_d.x_d, uav_pos_d.y_d, uav_pos_d.z_d, uav_pos_d.yaw_d,
                 current_angle.arm1_angle, current_angle.arm2_angle, current_angle.hand_angle,
                 base_fresh ? "true" : "false", ee_fresh ? "true" : "false", ee_error_norm,
-                pose_loss_count, ik_fail_count, calibrated_arm1_zero_offset_deg, calibrated_arm2_zero_offset_deg);
+                pose_loss_count, ik_fail_count, calibrated_arm1_zero_offset_deg, calibrated_arm2_zero_offset_deg, arm_base_offset_x_m);
         }
 
         uav_pos_d_pub.publish(uav_pos_d);
