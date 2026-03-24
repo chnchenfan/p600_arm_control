@@ -359,6 +359,8 @@ int main(int argc, char *argv[]) {
         }
 
         double reach_error = -1.0;
+        double p_rel_radius = -1.0;
+        double radius_minus_l2 = 0.0;
         if (!base_fresh || !ee_fresh || !g_real_arm_state.valid) {
             ++pose_loss_count;
             ROS_WARN_THROTTLE(1.0, "exp2 static IK waiting for fresh data, base_fresh=%s, ee_fresh=%s, arm_fresh=%s (%d/%d)",
@@ -378,6 +380,8 @@ int main(int argc, char *argv[]) {
             const Vec3 correction_world = ClampVec3Norm(ScaleVec3(ee_error_world, ee_outer_kp), ee_outer_clip_m);
             const Vec3 correction_body = RotateWorldToBody(correction_world, g_base_pose);
             const Vec3 p_rel_corrected = AddVec3(p_rel, correction_body);
+            p_rel_radius = NormVec3(p_rel_corrected);
+            radius_minus_l2 = p_rel_radius - l2_m;
 
             double solved_arm1_deg = last_valid_arm1_deg;
             double solved_arm2_deg = last_valid_arm2_deg;
@@ -398,8 +402,10 @@ int main(int argc, char *argv[]) {
                                                        &reach_error);
             if (!solved) {
                 ++ik_fail_count;
-                ROS_WARN_THROTTLE(1.0, "exp2 static IK failed (%d/%d), target=(%.3f, %.3f, %.3f), reach_error=%.4f",
-                                  ik_fail_count, ik_fail_limit, p_rel_corrected.x, p_rel_corrected.y, p_rel_corrected.z, reach_error);
+                ROS_WARN_THROTTLE(1.0, "exp2 static IK failed (%d/%d), target=(%.3f, %.3f, %.3f), radius=%.4f, L2=%.4f, radius_minus_l2=%.4f, reach_error=%.4f",
+                                  ik_fail_count, ik_fail_limit,
+                                  p_rel_corrected.x, p_rel_corrected.y, p_rel_corrected.z,
+                                  p_rel_radius, l2_m, radius_minus_l2, reach_error);
                 if (ik_fail_count >= ik_fail_limit) {
                     ROS_ERROR("exp2 static IK failed continuously, aborting test");
                     return 1;
@@ -420,9 +426,10 @@ int main(int argc, char *argv[]) {
 
         if ((now - last_log_time).toSec() >= 1.0) {
             last_log_time = now;
-            ROS_INFO("[exp2_static_ik] t=%.2f s, arm_d=(%.2f, %.2f, %.2f), base_fresh=%s, ee_fresh=%s, reach_error=%.4f, pose_loss=%d, ik_fail=%d, hold=(%.3f, %.3f, %.3f)",
+            ROS_INFO("[exp2_static_ik] t=%.2f s, arm_d=(%.2f, %.2f, %.2f), base_fresh=%s, ee_fresh=%s, radius=%.4f, L2=%.4f, radius_minus_l2=%.4f, reach_error=%.4f, pose_loss=%d, ik_fail=%d, hold=(%.3f, %.3f, %.3f)",
                      (now - test_start).toSec(), current_angle.arm1_angle, current_angle.arm2_angle, current_angle.hand_angle,
-                     base_fresh ? "true" : "false", ee_fresh ? "true" : "false", reach_error, pose_loss_count, ik_fail_count,
+                     base_fresh ? "true" : "false", ee_fresh ? "true" : "false",
+                     p_rel_radius, l2_m, radius_minus_l2, reach_error, pose_loss_count, ik_fail_count,
                      ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);
         }
 
