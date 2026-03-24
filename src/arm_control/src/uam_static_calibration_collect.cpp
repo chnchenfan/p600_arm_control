@@ -35,7 +35,7 @@ double AbsMax(double a, double b) {
 }
 
 // 默认静态采样姿态序列。
-// 这些点覆盖 0/15/30/45/55 度五层 arm2，与 -60 到 60 度的 arm1 扫描。
+// 这些点覆盖 0/15/30/35/40 度五层 arm2，与 -60 到 60 度的 arm1 扫描。
 // 顺序不是按分层简单拼接，而是人工重排成相邻样本变化较小的路径，
 // 让真机采样时尽量减少大幅反向跳变与超时。
 std::vector<std::pair<double, double>> DefaultSamples() {
@@ -58,12 +58,12 @@ std::vector<std::pair<double, double>> DefaultSamples() {
         {-15.0, 30.0},
         {15.0, 30.0},
         {45.0, 30.0},
-        {30.0, 45.0},
-        {0.0, 45.0},
-        {-30.0, 45.0},
-        {-15.0, 55.0},
-        {0.0, 55.0},
-        {15.0, 55.0},
+        {30.0, 35.0},
+        {0.0, 35.0},
+        {-30.0, 35.0},
+        {-15.0, 40.0},
+        {0.0, 40.0},
+        {15.0, 40.0},
     };
 }
 
@@ -81,6 +81,12 @@ int main(int argc, char **argv) {
     double sample_timeout_sec = 15.0;
     double angle_tolerance_deg = 1.0;
     double default_hand_angle_deg = 0.0;
+    bool startup_zero_enabled = true;
+    double startup_zero_timeout_sec = 20.0;
+    double startup_zero_hold_sec = 0.5;
+    double startup_zero_tolerance_deg = 1.0;
+    double startup_zero_arm1_deg = 0.0;
+    double startup_zero_arm2_deg = 0.0;
 
     pnh.param("publish_rate_hz", publish_rate_hz, publish_rate_hz);
     pnh.param("settle_confirm_sec", settle_confirm_sec, settle_confirm_sec);
@@ -88,6 +94,12 @@ int main(int argc, char **argv) {
     pnh.param("sample_timeout_sec", sample_timeout_sec, sample_timeout_sec);
     pnh.param("angle_tolerance_deg", angle_tolerance_deg, angle_tolerance_deg);
     pnh.param("default_hand_angle_deg", default_hand_angle_deg, default_hand_angle_deg);
+    pnh.param("startup_zero_enabled", startup_zero_enabled, startup_zero_enabled);
+    pnh.param("startup_zero_timeout_sec", startup_zero_timeout_sec, startup_zero_timeout_sec);
+    pnh.param("startup_zero_hold_sec", startup_zero_hold_sec, startup_zero_hold_sec);
+    pnh.param("startup_zero_tolerance_deg", startup_zero_tolerance_deg, startup_zero_tolerance_deg);
+    pnh.param("startup_zero_arm1_deg", startup_zero_arm1_deg, startup_zero_arm1_deg);
+    pnh.param("startup_zero_arm2_deg", startup_zero_arm2_deg, startup_zero_arm2_deg);
 
     if (publish_rate_hz <= 0.0) {
         publish_rate_hz = 30.0;
@@ -103,6 +115,15 @@ int main(int argc, char **argv) {
     }
     if (angle_tolerance_deg <= 0.0) {
         angle_tolerance_deg = 1.0;
+    }
+    if (startup_zero_timeout_sec <= 0.0) {
+        startup_zero_timeout_sec = 20.0;
+    }
+    if (startup_zero_hold_sec <= 0.0) {
+        startup_zero_hold_sec = 0.5;
+    }
+    if (startup_zero_tolerance_deg <= 0.0) {
+        startup_zero_tolerance_deg = angle_tolerance_deg;
     }
 
     const std::vector<std::pair<double, double>> samples = DefaultSamples();
@@ -133,6 +154,9 @@ int main(int argc, char **argv) {
 
     bool hand_initialized = false;
     double hand_angle_deg = default_hand_angle_deg;
+    bool startup_zero_done = !startup_zero_enabled;
+    ros::Time startup_zero_start = ros::Time::now();
+    ros::Time startup_zero_hold_start;
     std::size_t sample_idx = 0;
     Stage stage = Stage::kMove;
     ros::Time stage_start = ros::Time::now();
@@ -158,10 +182,18 @@ int main(int argc, char **argv) {
             break;
         }
 
-        const double target_arm1 = samples[sample_idx].first;
-        const double target_arm2 = samples[sample_idx].second;
+        double target_arm1 = samples[sample_idx].first;
+        double target_arm2 = samples[sample_idx].second;
+        bool evaluating_startup_zero = false;
+        if (!startup_zero_done) {
+            target_arm1 = startup_zero_arm1_deg;
+            target_arm2 = startup_zero_arm2_deg;
+            evaluating_startup_zero = true;
+        }
 
         // 连续发布目标角，保证即使串口侧或桥接节点短暂丢帧，目标仍会被刷新。
+        // 如果还在上电归零阶段，这里先强制把 arm1/arm2 推到 (0, 0)；
+        // 归零完成后才会进入后面的 24 组静态标定样本序列。
         uam_message::arm_angle cmd;
         cmd.arm1_angle = target_arm1;
         cmd.arm2_angle = target_arm2;
@@ -182,7 +214,36 @@ int main(int argc, char **argv) {
 
         const double arm1_error = target_arm1 - g_real_arm_state.arm1_deg;
         const double arm2_error = target_arm2 - g_real_arm_state.arm2_deg;
-        const bool within_tolerance = AbsMax(arm1_error, arm2_error) <= angle_tolerance_deg;
+        const double active_tolerance_deg = evaluating_startup_zero ? startup_zero_tolerance_deg : angle_tolerance_deg;
+        const bool within_tolerance = AbsMax(arm1_error, arm2_error) <= active_tolerance_deg;
+
+        if (evaluating_startup_zero) {
+            if (within_tolerance) {
+                if (startup_zero_hold_start.isZero()) {
+                    startup_zero_hold_start = now;
+                }
+                if ((now - startup_zero_hold_start).toSec() >= startup_zero_hold_sec) {
+                    startup_zero_done = true;
+                    stage = Stage::kMove;
+                    stage_start = now;
+                    tolerance_hold_start = ros::Time();
+                    ROS_INFO("static calibration startup zero finished: target=(%.1f, %.1f), real=(%.2f, %.2f)",
+                             startup_zero_arm1_deg, startup_zero_arm2_deg,
+                             g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg);
+                }
+            } else {
+                startup_zero_hold_start = ros::Time();
+            }
+
+            if ((now - startup_zero_start).toSec() > startup_zero_timeout_sec) {
+                ROS_ERROR("static calibration startup zero failed within %.2f s: target=(%.1f, %.1f), real=(%.2f, %.2f), error=(%.2f, %.2f)",
+                          startup_zero_timeout_sec, startup_zero_arm1_deg, startup_zero_arm2_deg,
+                          g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg, arm1_error, arm2_error);
+                return 1;
+            }
+            rate.sleep();
+            continue;
+        }
 
         if (stage == Stage::kMove) {
             // 收敛判定不是“瞬间误差进阈值”就算完成，而是必须持续一段 settle_confirm_sec。

@@ -49,5 +49,17 @@
         <param name="angle_tolerance_deg" value="1.0" />
         <!-- 如果启动时尚未读到手爪反馈，先用这个默认值保持手爪角不动 -->
         <param name="default_hand_angle_deg" value="0.0" />
+
+        <!--
+            上电归零阶段：
+            在真正进入 24 组标定姿态前，先沿现有机械臂命令链把 arm1/arm2 推到 0 度，
+            只有确认 /wjl/arm/real/angle_r 反馈也到位后，才进入正式采样。
+        -->
+        <param name="startup_zero_enabled" value="true" />
+        <param name="startup_zero_timeout_sec" value="20.0" />
+        <param name="startup_zero_hold_sec" value="0.5" />
+        <param name="startup_zero_tolerance_deg" value="1.0" />
+        <param name="startup_zero_arm1_deg" value="0.0" />
+        <param name="startup_zero_arm2_deg" value="0.0" />
     </node>
 </launch>

@@ -434,6 +434,12 @@ int main(int argc, char *argv[]) {
     int pose_loss_limit = 10;
     double arm1_dot_max_deg_s = 90.0;
     double arm2_dot_max_deg_s = 90.0;
+    bool startup_zero_enabled = true;
+    double startup_zero_timeout_sec = 20.0;
+    double startup_zero_hold_sec = 0.5;
+    double startup_zero_tolerance_deg = 1.0;
+    double startup_zero_arm1_deg = 0.0;
+    double startup_zero_arm2_deg = 0.0;
     double hold_freeze_samples = 1.0;
     bool use_local_pose_mapping = true;
     bool use_initial_ee_hold = true; // 当前末端位置自动冻结固定点标志位，true为启用，false为不启用
@@ -471,6 +477,12 @@ int main(int argc, char *argv[]) {
     pnh.param("pose_loss_limit", pose_loss_limit, pose_loss_limit);
     pnh.param("arm1_dot_max_deg_s", arm1_dot_max_deg_s, arm1_dot_max_deg_s);
     pnh.param("arm2_dot_max_deg_s", arm2_dot_max_deg_s, arm2_dot_max_deg_s);
+    pnh.param("startup_zero_enabled", startup_zero_enabled, startup_zero_enabled);
+    pnh.param("startup_zero_timeout_sec", startup_zero_timeout_sec, startup_zero_timeout_sec);
+    pnh.param("startup_zero_hold_sec", startup_zero_hold_sec, startup_zero_hold_sec);
+    pnh.param("startup_zero_tolerance_deg", startup_zero_tolerance_deg, startup_zero_tolerance_deg);
+    pnh.param("startup_zero_arm1_deg", startup_zero_arm1_deg, startup_zero_arm1_deg);
+    pnh.param("startup_zero_arm2_deg", startup_zero_arm2_deg, startup_zero_arm2_deg);
     pnh.param("hold_freeze_samples", hold_freeze_samples, hold_freeze_samples);
     pnh.param("use_local_pose_mapping", use_local_pose_mapping, use_local_pose_mapping);
     pnh.param("use_initial_ee_hold", use_initial_ee_hold, use_initial_ee_hold);
@@ -521,6 +533,15 @@ int main(int argc, char *argv[]) {
     if (hold_freeze_samples < 1.0) {
         hold_freeze_samples = 1.0;
     }
+    if (startup_zero_timeout_sec <= 0.0) {
+        startup_zero_timeout_sec = 20.0;
+    }
+    if (startup_zero_hold_sec <= 0.0) {
+        startup_zero_hold_sec = 0.5;
+    }
+    if (startup_zero_tolerance_deg <= 0.0) {
+        startup_zero_tolerance_deg = 1.0;
+    }
 
     // 关节限位：
     // arm1 继续从现有参数服务器读取；
@@ -554,15 +575,66 @@ int main(int argc, char *argv[]) {
 
     ROS_INFO("exp2 service ready, waiting for /wjl/start/uav_desired");
     ROS_INFO(
-        "exp2 params: base_topic=%s, ee_topic=%s, local_topic=%s, L1=%.3f, L2=%.3f, base_offset=[%.3f, %.3f, %.3f], theta=[%.1f, %.1f], T=%.2f, settle=%.2f, exp=%.2f, recovery=%.2f, local_mapping=%s, online_calib=%s",
+        "exp2 params: base_topic=%s, ee_topic=%s, local_topic=%s, L1=%.3f, L2=%.3f, base_offset=[%.3f, %.3f, %.3f], theta=[%.1f, %.1f], T=%.2f, settle=%.2f, exp=%.2f, recovery=%.2f, startup_zero=%s, local_mapping=%s, online_calib=%s",
         base_pose_topic.c_str(), ee_pose_topic.c_str(), local_pose_topic.c_str(), l1_m, l2_m,
         arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m,
         theta_min_deg, theta_max_deg, theta_period_sec, settle_time, experiment_time, recovery_time,
+        startup_zero_enabled ? "true" : "false",
         use_local_pose_mapping ? "true" : "false", use_online_joint_calibration ? "true" : "false");
 
     ros::Rate rate(30.0);
-    while (ros::ok() && !start_flag) {
+    bool startup_zero_done = !startup_zero_enabled;
+    ros::Time startup_zero_start = ros::Time::now();
+    ros::Time startup_zero_hold_start;
+    double startup_zero_hand_deg = 0.0;
+    bool startup_zero_hand_initialized = false;
+    while (ros::ok() && (!start_flag || !startup_zero_done)) {
         ros::spinOnce();
+
+        if (startup_zero_enabled) {
+            if (!startup_zero_hand_initialized && g_real_arm_state.valid) {
+                startup_zero_hand_deg = Clamp(g_real_arm_state.hand_deg, hand_min, hand_max);
+                startup_zero_hand_initialized = true;
+            }
+
+            uam_message::arm_angle startup_zero_cmd;
+            startup_zero_cmd.arm1_angle = Clamp(startup_zero_arm1_deg, arm1_min, arm1_max);
+            startup_zero_cmd.arm2_angle = Clamp(startup_zero_arm2_deg, arm2_min, arm2_max);
+            startup_zero_cmd.hand_angle = startup_zero_hand_initialized ? startup_zero_hand_deg : 0.0;
+            joint_angle_pub.publish(startup_zero_cmd);
+
+            if (!startup_zero_done) {
+                if (!g_real_arm_state.valid) {
+                    ROS_WARN_THROTTLE(1.0, "exp2 startup zero waiting for /wjl/arm/real/angle_r");
+                } else {
+                    const double arm1_error = startup_zero_cmd.arm1_angle - g_real_arm_state.arm1_deg;
+                    const double arm2_error = startup_zero_cmd.arm2_angle - g_real_arm_state.arm2_deg;
+                    const bool within_tolerance =
+                        std::max(std::fabs(arm1_error), std::fabs(arm2_error)) <= startup_zero_tolerance_deg;
+                    if (within_tolerance) {
+                        if (startup_zero_hold_start.isZero()) {
+                            startup_zero_hold_start = ros::Time::now();
+                        }
+                        if ((ros::Time::now() - startup_zero_hold_start).toSec() >= startup_zero_hold_sec) {
+                            startup_zero_done = true;
+                            ROS_INFO("exp2 startup zero finished: target=(%.1f, %.1f), real=(%.2f, %.2f)",
+                                     startup_zero_cmd.arm1_angle, startup_zero_cmd.arm2_angle,
+                                     g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg);
+                        }
+                    } else {
+                        startup_zero_hold_start = ros::Time();
+                    }
+
+                    if ((ros::Time::now() - startup_zero_start).toSec() > startup_zero_timeout_sec) {
+                        ROS_ERROR("exp2 startup zero failed within %.2f s: target=(%.1f, %.1f), real=(%.2f, %.2f), error=(%.2f, %.2f)",
+                                  startup_zero_timeout_sec, startup_zero_cmd.arm1_angle, startup_zero_cmd.arm2_angle,
+                                  g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg, arm1_error, arm2_error);
+                        return 1;
+                    }
+                }
+            }
+        }
+
         rate.sleep();
     }
     if (!ros::ok()) {

@@ -49,6 +49,11 @@ bash shell/Experiment/uam_control_desired_exp2_static_ik.sh
 
 Only continue to the formal experiment-2 flight after this static test finishes without continuous IK failure.
 
+Target-point definition for the static IK test:
+- The test does not use a manually typed new target by default.
+- With `use_initial_ee_hold=true`, it freezes the current `arm_target` world position into a static `P_hold` after startup.
+- The node then repeatedly solves IK to keep the end effector at that frozen world point while the UAV base remains stationary.
+
 4. Start static calibration collection. This entrypoint launches the full arm-side chain required for calibration:
 - arm parameter loading
 - `motors_simulation` topic bridge (`/wjl/arm/guidefly/angle_d -> /wjl/arm/real/angle_d`)
