@@ -38,7 +38,12 @@ cd ~/p600_arm_control
 bash shell/Experiment/uam_mocap.sh exp2 <VRPN_SERVER_IP>
 ```
 
-3. Start static calibration collection:
+3. Start static calibration collection. This entrypoint launches the full arm-side chain required for calibration:
+- arm parameter loading
+- `motors_simulation` topic bridge (`/wjl/arm/guidefly/angle_d -> /wjl/arm/real/angle_d`)
+- `serial_` real-arm driver (`/wjl/arm/real/angle_r`)
+- `uam_static_calibration_collect`
+
 
 ```bash
 cd ~/p600_arm_control
@@ -72,7 +77,7 @@ python3 /home/cf/Program/code/P600_uam/p600_arm_control/shell/Calibration/fit_st
 
 ### Data definition
 
-The aircraft-side collector publishes 12 fixed static arm configurations. Each valid sample window lasts 2.5 s. The host-side fitter uses `/wjl/calibration/sample_index` to segment the bag automatically.
+The aircraft-side collector publishes 12 fixed static arm configurations. Each valid sample window lasts 2.5 s. The collector waits for `/wjl/arm/real/angle_r` from the real arm driver before opening each sample window. The host-side fitter uses `/wjl/calibration/sample_index` to segment the bag automatically.
 
 ### Output
 
@@ -130,7 +135,7 @@ Recommended acceptance targets:
 ## Notes
 
 - Do not fly during calibration.
-- The aircraft computer only needs to compile and run the C++ collector plus rosbag recording; it does not need to run the fitting script.
+- The aircraft computer only needs to compile and run the calibration launch plus rosbag recording; it does not need to run the fitting script.
 - The fitting script is intended to run on the host workstation with Python 3, `numpy`, `scipy`, and `rosbag` available.
 - Do not release all parameters at once in the first iteration.
 - The stage-1 script in this repository implements only the stage-1 parameter set.

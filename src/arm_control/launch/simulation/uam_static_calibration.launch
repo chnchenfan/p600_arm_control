@@ -1,5 +1,11 @@
 <?xml version="1.0"?>
 <launch>
+    <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />
+
+    <!-- Reuse the same real-arm command/feedback chain as exp2. -->
+    <node pkg="arm_control" type="motors_simulation" name="motors_simulation" output="screen" />
+    <node pkg="arm_control" type="serial_" name="serial_" output="screen" />
+
     <node pkg="arm_control" type="uam_static_calibration_collect" name="uam_static_calibration_collect" output="screen">
         <param name="publish_rate_hz" value="30.0" />
         <param name="settle_confirm_sec" value="0.5" />
