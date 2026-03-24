@@ -244,10 +244,10 @@ bool IsPoseFresh(const PoseState &pose, const ros::Time &now, double timeout_sec
 // 2DoF 机械臂逆解。
 //
 // 几何模型：
-//   p_rel = [L2*cos(q2)*cos(q1), L2*cos(q2)*sin(q1), L2*sin(q2)]
+//   p_rel = [L2*cos(q2)*cos(q1), -L2*cos(q2)*sin(q1), L2*sin(q2)]
 //
 // 推导思路：
-// 1. 先从目标点的 x/y 分量确定 arm1 的水平朝向 q1；
+// 1. 先从目标点的 x/y 分量确定 arm1 的水平朝向 q1；实测约定下，arm1 增大对应末端朝 -y。
 // 2. 再用水平投影半径 sqrt(x^2+y^2) 和 z 分量确定 arm2 的抬头角 q2；
 // 3. 用上一帧关节角做连续支选择，避免角度在 +/-180 度附近跳变。
 //
@@ -288,7 +288,7 @@ bool SolveInverseKinematics(const Vec3 &target_body,
 
     // 在线零位标定后，IK 几何角需要先扣掉本次飞行测得的装配偏置，
     // 再转换成发送给舵机/控制器的命令角。
-    const double q1_geometry = std::atan2(target_body.y, target_body.x);
+    const double q1_geometry = std::atan2(-target_body.y, target_body.x);
     const double q2_geometry = std::atan2(target_body.z, horizontal_radius);
     double q1_candidate = q1_geometry - DegToRad(arm1_zero_offset_deg);
     double q2_candidate = q2_geometry - DegToRad(arm2_zero_offset_deg);
@@ -714,7 +714,7 @@ int main(int argc, char *argv[]) {
                 // 计算偏置
                 const double horizontal_radius = std::sqrt(p_rel_meas.x * p_rel_meas.x + p_rel_meas.y * p_rel_meas.y);// 水平投影半径：r = sqrt(Px^2 + Py^2)
                 if (radius >= 1e-9 && reach_error <= eps_r_m && horizontal_radius >= eps_xy_m) {
-                    const double q1_true_deg = RadToDeg(std::atan2(p_rel_meas.y, p_rel_meas.x)); // 计算真实的q1
+                    const double q1_true_deg = RadToDeg(std::atan2(-p_rel_meas.y, p_rel_meas.x)); // 按实测约定计算真实的q1：arm1 增大时末端朝 -y
                     const double q2_true_deg = RadToDeg(std::atan2(p_rel_meas.z, horizontal_radius)); // 计算真实的q2
                     const double arm1_offset_sample_deg = RadToDeg(
                         WrapToPi(DegToRad(q1_true_deg - g_real_arm_state.arm1_deg)));// 减去偏置

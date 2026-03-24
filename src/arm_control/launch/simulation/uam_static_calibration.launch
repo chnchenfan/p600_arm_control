@@ -10,7 +10,7 @@
            /wjl/arm/real/angle_d      ->  串口发给步进电机
            步进电机反馈                ->  /wjl/arm/real/angle_r
         4. 起 uam_static_calibration_collect 节点：
-           逐个发布静态样本姿态，并根据 /wjl/arm/real/angle_r 判断是否真正到位；
+           逐个发布 24 组高覆盖静态样本姿态，并根据 /wjl/arm/real/angle_r 判断是否真正到位；
         5. 录包脚本只需要额外录下上面这些话题，后处理即可自动分段和拟合。
     -->
     <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />

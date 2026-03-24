@@ -64,7 +64,7 @@ sample_hold_sec=2.5
 settle_confirm_sec=0.5
 angle_tolerance_deg=1.0
 sample_timeout_sec=15.0
-sample_sequence=(-60,0);(-45,15);(-30,30);(-30,0);(-15,15);(0,30);(0,0);(15,15);(30,30);(30,0);(45,15);(60,0)
+sample_sequence=(-60,0);(-45,0);(-30,0);(-15,0);(0,0);(15,0);(30,0);(45,0);(60,0);(60,15);(30,15);(0,15);(-30,15);(-60,15);(-45,30);(-15,30);(15,30);(45,30);(30,45);(0,45);(-30,45);(-15,55);(0,55);(15,55)
 base_pose_topic=/vrpn_client_node/arm_base/pose
 ee_pose_topic=/vrpn_client_node/arm_target/pose
 arm_real_topic=/wjl/arm/real/angle_r
@@ -80,5 +80,5 @@ echo "Press Ctrl-C to stop rosbag recording."
 # - base/target pose：用于建立动捕几何模型；
 # - real/angle_r：用于提供真实关节角；
 # - guidefly/angle_d：用于回看当时给了什么命令；
-# - sample_index：用于把整包数据自动切成 12 个静态样本窗口。
+# - sample_index：用于把整包数据自动切成 24 个静态样本窗口。
 rosbag record -O "$BAG_PATH"   /vrpn_client_node/arm_base/pose   /vrpn_client_node/arm_target/pose   /wjl/arm/real/angle_r   /wjl/arm/guidefly/angle_d   /wjl/calibration/sample_index

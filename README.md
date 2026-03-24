@@ -100,6 +100,7 @@ Main entrypoints:
 - Control node: `src/arm_control/src/uam_desired_exp2.cpp`
 - Arm-side startup: `src/arm_control/shell/desired_uam_fly_exp2.sh`
 - Combined startup: `shell/Experiment/uam_control_desired_exp2.sh`
+- Static ground IK test: `shell/Experiment/uam_control_desired_exp2_static_ik.sh`
 - Recording: `shell/Experiment/record_experiment2_data.sh`
 - Plotting: `shell/Plot/plot_experiment2.py`
 
@@ -145,6 +146,7 @@ Combined experiment startup scripts:
 
 - Experiment 1: `shell/Experiment/uam_control_desired.sh`
 - Experiment 2: `shell/Experiment/uam_control_desired_exp2.sh`
+- Experiment 2 static IK test: `shell/Experiment/uam_control_desired_exp2_static_ik.sh`
 - Experiment 3: `shell/Experiment/uam_control_desired_exp3.sh`
 - Experiment 4: `shell/Experiment/uam_control_desired_exp4.sh`
 
@@ -334,6 +336,7 @@ GitHub: <https://github.com/chnchenfan/p600_arm_control>
 
 - 实验 1: `shell/Experiment/uam_control_desired.sh`
 - 实验 2: `shell/Experiment/uam_control_desired_exp2.sh`
+- 实验 2 静态逆解测试: `shell/Experiment/uam_control_desired_exp2_static_ik.sh`
 - 实验 3: `shell/Experiment/uam_control_desired_exp3.sh`
 - 实验 4: `shell/Experiment/uam_control_desired_exp4.sh`
 

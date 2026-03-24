@@ -8,9 +8,12 @@
 # 1. 根据 /wjl/calibration/sample_index 自动找出每个有效静态样本窗口；
 # 2. 对每个窗口内的 arm_base / arm_target / real_angle 数据取均值；
 # 3. 建立“动捕测得的几何关系”和“关节角正运动学几何关系”之间的残差；
-# 4. 用最小二乘拟合 stage-1 参数：
-#    [arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m,
-#     arm1_zero_offset_deg, arm2_zero_offset_deg]
+# 4. 用最小二乘拟合几何参数。
+#
+# 当前支持两种模式：
+# - base_xyz_dq：拟合 [arm_base_offset_x/y/z, arm1_zero_offset, arm2_zero_offset]
+# - dx_only：只拟合 arm_base_offset_x_m，其余量固定为 0
+# - dx_l2：拟合 [arm_base_offset_x_m, L2_m]，其余量固定为 0
 #
 # 信息流和文件之间的关系如下：
 # - 飞机电脑上的 collector 节点发布 /wjl/calibration/sample_index
@@ -35,18 +38,17 @@ except ImportError as exc:
     raise SystemExit("rosbag/rospy import failed: %s" % exc)
 
 
-# 默认输入话题。
-# 这些默认值和录包脚本 record_static_calibration_data.sh 保持一致。
 TOPIC_BASE = "/vrpn_client_node/arm_base/pose"
 TOPIC_TARGET = "/vrpn_client_node/arm_target/pose"
 TOPIC_ARM_REAL = "/wjl/arm/real/angle_r"
 TOPIC_SAMPLE_INDEX = "/wjl/calibration/sample_index"
+FIT_MODE_FULL = "base_xyz_dq"
+FIT_MODE_DX_ONLY = "dx_only"
+FIT_MODE_DX_L2 = "dx_l2"
 
 
 @dataclass
 class Window:
-    # 一个有效静态样本窗口。
-    # sample_index 是采样节点打的标签，start/end 是这个标签在 bag 中持续有效的时间范围。
     sample_index: int
     start_sec: float
     end_sec: float
@@ -58,8 +60,6 @@ class Window:
 
 @dataclass
 class SampleMean:
-    # 每个窗口经过“窗口内均值化”之后的结果。
-    # 拟合器不直接用原始高频消息，而是用这里的每窗口均值样本。
     sample_index: int
     start_sec: float
     end_sec: float
@@ -74,24 +74,24 @@ class SampleMean:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fit stage-1 static calibration parameters from rosbag.")
+    parser = argparse.ArgumentParser(description="Fit static calibration parameters from rosbag.")
     parser.add_argument("--bag", default=None, help="Input rosbag path")
     parser.add_argument("--output-dir", default=None, help="Output directory for fit_result.json and sample_means.csv")
     parser.add_argument("--l1", type=float, default=0.161, help="Current measured L1 in meters")
     parser.add_argument("--l2", type=float, default=0.262, help="Current measured L2 in meters")
-    # 这里的最小窗口时长不是“平稳性检测”，而是对采样窗口做一次最基础的完整性筛选。
-    # 例如采样中途被打断、编号只持续了很短一段时间，这类窗口会被直接丢弃。
     parser.add_argument("--min-window-sec", type=float, default=2.0, help="Minimum valid sample window duration")
     parser.add_argument("--base-topic", default=TOPIC_BASE)
     parser.add_argument("--target-topic", default=TOPIC_TARGET)
     parser.add_argument("--arm-real-topic", default=TOPIC_ARM_REAL)
     parser.add_argument("--sample-topic", default=TOPIC_SAMPLE_INDEX)
+    parser.add_argument(
+        "--fit-mode",
+        default=FIT_MODE_FULL,
+        choices=[FIT_MODE_FULL, FIT_MODE_DX_ONLY, FIT_MODE_DX_L2],
+        help="Parameter subset to fit",
+    )
     parser.add_argument("--synthetic-test", action="store_true", help="Run a self-check on synthetic data instead of reading a bag")
     return parser.parse_args()
-
-
-def stamp_to_sec(stamp) -> float:
-    return float(stamp.secs) + float(stamp.nsecs) * 1e-9
 
 
 def normalize_quaternion(q: np.ndarray) -> np.ndarray:
@@ -102,9 +102,6 @@ def normalize_quaternion(q: np.ndarray) -> np.ndarray:
 
 
 def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
-    # 四元数转旋转矩阵，用于：
-    # 1. 把 body 固定外参 [dx,dy,dz] 旋到世界系；
-    # 2. 把世界系相对向量转回基座系。
     x, y, z, w = normalize_quaternion(q)
     return np.array(
         [
@@ -117,8 +114,6 @@ def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
 
 
 def average_quaternions(quaternions: Sequence[np.ndarray]) -> np.ndarray:
-    # 四元数平均前先做符号对齐。
-    # 因为 q 和 -q 表示同一个姿态，如果不先对齐，直接平均会互相抵消。
     if not quaternions:
         raise ValueError("no quaternions to average")
     ref = normalize_quaternion(np.array(quaternions[0], dtype=float))
@@ -133,13 +128,7 @@ def average_quaternions(quaternions: Sequence[np.ndarray]) -> np.ndarray:
 
 
 def extract_windows(bag: rosbag.Bag, sample_topic: str, min_window_sec: float) -> List[Window]:
-    # 第一步：只看 /wjl/calibration/sample_index，自动提取“有效静态样本窗口”。
-    #
-    # 规则：
-    # - sample_index >= 0  表示当前时刻属于某个有效样本窗口；
-    # - sample_index == -1 表示移动/收敛阶段，这段数据不用于拟合；
-    # - 同一个编号连续保持的时间段，构成一个窗口；
-    # - 窗口长度必须 >= min_window_sec，太短的窗口直接丢弃。
+    # 根据 sample_index 自动提取有效静态样本窗口。
     windows: List[Window] = []
     active_index = None
     active_start = None
@@ -177,7 +166,6 @@ def extract_windows(bag: rosbag.Bag, sample_topic: str, min_window_sec: float) -
 
 
 def collect_window_messages(bag: rosbag.Bag, topic: str, window: Window) -> List[Tuple[float, object]]:
-    # 从整包数据里裁出某个窗口内、某个 topic 的所有消息。
     start = rospy.Time.from_sec(window.start_sec)
     end = rospy.Time.from_sec(window.end_sec)
     return [(t.to_sec(), msg) for _, msg, t in bag.read_messages(topics=[topic], start_time=start, end_time=end)]
@@ -190,15 +178,7 @@ def compute_sample_means(
     target_topic: str,
     arm_real_topic: str,
 ) -> List[SampleMean]:
-    # 第二步：对每个有效窗口做“窗口内均值化”。
-    #
-    # 信息流是：
-    #   Window -> 取出该窗口内的 base/target/real_angle 消息 -> 求均值 -> SampleMean
-    #
-    # 这里没有再做复杂的平稳性检测，只要：
-    # - 三类消息都存在
-    # - 窗口时长已经通过前一步筛选
-    # 就会生成一个均值样本。
+    # 对每个窗口内的数据取均值，作为拟合输入样本。
     results: List[SampleMean] = []
     for window in windows:
         base_msgs = collect_window_messages(bag, base_topic, window)
@@ -241,35 +221,36 @@ def compute_sample_means(
 
 
 def forward_kinematics(l2_m: float, arm1_deg: float, arm2_deg: float, dq1_deg: float, dq2_deg: float) -> np.ndarray:
-    # 理论正运动学模型。
-    # 输入：实测关节角 + 待拟合的零位偏置
-    # 输出：肩关节到末端工作点的理论向量（基座系）
+    # 实测约定：arm1 增大时，末端在 arm_base 体坐标系中朝 -y 方向运动。
+    # 因此二维水平面的 FK 不再使用 +sin(q1)，而是使用 -sin(q1)。
     q1 = math.radians(arm1_deg + dq1_deg)
     q2 = math.radians(arm2_deg + dq2_deg)
     return np.array(
         [
             l2_m * math.cos(q2) * math.cos(q1),
-            l2_m * math.cos(q2) * math.sin(q1),
+            -l2_m * math.cos(q2) * math.sin(q1),
             l2_m * math.sin(q2),
         ],
         dtype=float,
     )
 
 
-def compute_residual_vector(theta: np.ndarray, samples: Sequence[SampleMean], l1_m: float, l2_m: float) -> np.ndarray:
-    # 第三步：构造最小二乘残差。
-    #
-    # 参数向量 theta = [dx, dy, dz, dq1_deg, dq2_deg]
-    # 其中：
-    # - [dx,dy,dz] 是 arm_base 刚体原点相对真实基座原点的 body 固定外参
-    # - dq1/dq2 是关节零位偏置
-    #
-    # 对每个样本：
-    # 1. 用 base_quaternion 把 [dx,dy,dz] 旋到世界系，得到真实基座原点 p_B^W
-    # 2. 用 target_position - p_B^W 算出世界系下“基座到末端”的向量
-    # 3. 再转回基座系，减去 [0,0,-L1] 得到测量向量 p_rel_meas
-    # 4. 用 forward_kinematics 得到理论向量 p_rel_fk
-    # 5. 残差 = p_rel_meas - p_rel_fk
+def expand_theta(free_theta: np.ndarray, fit_mode: str) -> np.ndarray:
+    # 把“当前拟合模式下的自由参数”映射回统一的 5 维参数向量：
+    # [dx, dy, dz, dq1, dq2]
+    theta = np.zeros(5, dtype=float)
+    if fit_mode == FIT_MODE_DX_ONLY:
+        theta[0] = float(free_theta[0])
+    elif fit_mode == FIT_MODE_DX_L2:
+        theta[0] = float(free_theta[0])
+    elif fit_mode == FIT_MODE_FULL:
+        theta[:] = np.array(free_theta, dtype=float)
+    else:
+        raise ValueError("unsupported fit_mode: %s" % fit_mode)
+    return theta
+
+
+def residual_vector_from_full_theta(theta: np.ndarray, samples: Sequence[SampleMean], l1_m: float, l2_m: float) -> np.ndarray:
     dx, dy, dz, dq1_deg, dq2_deg = theta.tolist()
     offset_body = np.array([dx, dy, dz], dtype=float)
     residuals: List[float] = []
@@ -284,9 +265,17 @@ def compute_residual_vector(theta: np.ndarray, samples: Sequence[SampleMean], l1
     return np.array(residuals, dtype=float)
 
 
-def residual_norms(theta: np.ndarray, samples: Sequence[SampleMean], l1_m: float, l2_m: float) -> List[float]:
-    # 把整体残差向量按样本拆回 3 维向量，便于输出每个样本的误差范数。
-    vec = compute_residual_vector(theta, samples, l1_m, l2_m)
+def compute_residual_vector(free_theta: np.ndarray, samples: Sequence[SampleMean], l1_m: float, l2_m: float, fit_mode: str) -> np.ndarray:
+    # 构造拟合器使用的残差。不同模式下只放开不同子集的参数。
+    theta = expand_theta(free_theta, fit_mode)
+    effective_l2 = l2_m
+    if fit_mode == FIT_MODE_DX_L2:
+        effective_l2 = float(free_theta[1])
+    return residual_vector_from_full_theta(theta, samples, l1_m, effective_l2)
+
+
+def residual_norms(full_theta: np.ndarray, samples: Sequence[SampleMean], l1_m: float, l2_m: float) -> List[float]:
+    vec = residual_vector_from_full_theta(full_theta, samples, l1_m, l2_m)
     reshaped = vec.reshape((-1, 3))
     return [float(np.linalg.norm(row)) for row in reshaped]
 
@@ -297,25 +286,39 @@ def rms_from_residual_vector(residual_vector: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(residual_vector))))
 
 
-def fit_stage1(samples: Sequence[SampleMean], l1_m: float, l2_m: float):
-    # 第四步：调用 scipy 的 least_squares 做 stage-1 拟合。
-    #
-    # 这里是一个带边界约束的非线性最小二乘问题。
-    # 初值全部从 0 开始，表示先假设“没有外参偏移、没有零位偏置”。
-    initial_theta = np.zeros(5, dtype=float)
-    lower = np.array([-0.08, -0.08, -0.08, -20.0, -20.0], dtype=float)
-    upper = np.array([0.08, 0.08, 0.08, 20.0, 20.0], dtype=float)
+def fit_stage1(samples: Sequence[SampleMean], l1_m: float, l2_m: float, fit_mode: str):
+    # 调用 least_squares。
+    # dx_only：验证 arm_base x 偏移是否是主误差源。
+    # dx_l2：验证 arm_base x 偏移 + 有效 L2 是否足以解释当前样本。
+    if fit_mode == FIT_MODE_DX_ONLY:
+        initial_free = np.zeros(1, dtype=float)
+        lower = np.array([-0.08], dtype=float)
+        upper = np.array([0.08], dtype=float)
+    elif fit_mode == FIT_MODE_DX_L2:
+        initial_free = np.array([0.0, l2_m], dtype=float)
+        lower = np.array([-0.08, 0.15], dtype=float)
+        upper = np.array([0.08, 0.35], dtype=float)
+    elif fit_mode == FIT_MODE_FULL:
+        initial_free = np.zeros(5, dtype=float)
+        lower = np.array([-0.08, -0.08, -0.08, -20.0, -20.0], dtype=float)
+        upper = np.array([0.08, 0.08, 0.08, 20.0, 20.0], dtype=float)
+    else:
+        raise ValueError("unsupported fit_mode: %s" % fit_mode)
+
     result = least_squares(
         compute_residual_vector,
-        x0=initial_theta,
+        x0=initial_free,
         bounds=(lower, upper),
-        args=(samples, l1_m, l2_m),
+        args=(samples, l1_m, l2_m, fit_mode),
     )
-    return result, initial_theta
+    initial_full = expand_theta(initial_free, fit_mode)
+    fitted_full = expand_theta(np.array(result.x, dtype=float), fit_mode)
+    fitted_l2 = float(result.x[1]) if fit_mode == FIT_MODE_DX_L2 else float(l2_m)
+    initial_l2 = float(initial_free[1]) if fit_mode == FIT_MODE_DX_L2 else float(l2_m)
+    return result, initial_full, fitted_full, initial_l2, fitted_l2
 
 
 def write_sample_csv(path: str, samples: Sequence[SampleMean]) -> None:
-    # 把“窗口均值样本”导出成 CSV，方便人工检查每个样本到底取到了什么均值。
     fieldnames = [
         "sample_index",
         "start_sec",
@@ -365,19 +368,22 @@ def write_sample_csv(path: str, samples: Sequence[SampleMean]) -> None:
 
 
 def build_result_dict(
+    fit_mode: str,
     result,
     initial_theta: np.ndarray,
+    fitted_theta: np.ndarray,
     samples: Sequence[SampleMean],
     l1_m: float,
-    l2_m: float,
+    initial_l2_m: float,
+    fitted_l2_m: float,
 ) -> Dict[str, object]:
-    # 汇总拟合结果，输出成 JSON。
-    fitted_theta = np.array(result.x, dtype=float)
-    initial_residual_vector = compute_residual_vector(initial_theta, samples, l1_m, l2_m)
-    fitted_residual_vector = compute_residual_vector(fitted_theta, samples, l1_m, l2_m)
+    initial_residual_vector = residual_vector_from_full_theta(initial_theta, samples, l1_m, initial_l2_m)
+    fitted_residual_vector = residual_vector_from_full_theta(fitted_theta, samples, l1_m, fitted_l2_m)
     return {
+        "fit_mode": fit_mode,
         "l1_m": l1_m,
-        "l2_m": l2_m,
+        "initial_l2_m": initial_l2_m,
+        "fitted_l2_m": fitted_l2_m,
         "sample_count": len(samples),
         "initial_theta": {
             "arm_base_offset_x_m": float(initial_theta[0]),
@@ -395,7 +401,7 @@ def build_result_dict(
         },
         "initial_rms_m": rms_from_residual_vector(initial_residual_vector),
         "fitted_rms_m": rms_from_residual_vector(fitted_residual_vector),
-        "per_sample_residual_norm_m": residual_norms(fitted_theta, samples, l1_m, l2_m),
+        "per_sample_residual_norm_m": residual_norms(fitted_theta, samples, l1_m, fitted_l2_m),
         "optimizer": {
             "success": bool(result.success),
             "status": int(result.status),
@@ -407,7 +413,6 @@ def build_result_dict(
 
 
 def print_launch_snippet(result_dict: Dict[str, object]) -> None:
-    # 把最终参数打印成可直接抄回 launch 的片段。
     theta = result_dict["fitted_theta"]
     print("\nSuggested launch params:")
     print('<param name="arm_base_offset_x_m" value="%.6f" />' % theta["arm_base_offset_x_m"])
@@ -415,11 +420,11 @@ def print_launch_snippet(result_dict: Dict[str, object]) -> None:
     print('<param name="arm_base_offset_z_m" value="%.6f" />' % theta["arm_base_offset_z_m"])
     print('<param name="arm1_zero_offset_deg" value="%.6f" />' % theta["arm1_zero_offset_deg"])
     print('<param name="arm2_zero_offset_deg" value="%.6f" />' % theta["arm2_zero_offset_deg"])
+    if result_dict.get("fit_mode") == FIT_MODE_DX_L2:
+        print("# fitted_l2_m = %.6f" % result_dict["fitted_l2_m"])
 
 
 def run_synthetic_test() -> int:
-    # 合成数据自检：
-    # 人为构造一组已知真值参数，生成样本，再看拟合器能否大致回归出这些参数。
     true_theta = np.array([0.031, -0.006, 0.012, 2.0, -3.0], dtype=float)
     l1_m = 0.161
     l2_m = 0.262
@@ -449,13 +454,11 @@ def run_synthetic_test() -> int:
             )
         )
 
-    result, initial_theta = fit_stage1(samples, l1_m, l2_m)
-    fitted_theta = np.array(result.x, dtype=float)
-    error = np.abs(fitted_theta - true_theta)
+    result, _, fitted_full, _, fitted_l2 = fit_stage1(samples, l1_m, l2_m, FIT_MODE_FULL)
+    error = np.abs(fitted_full - true_theta)
     print("synthetic_true_theta=", true_theta.tolist())
-    print("synthetic_fitted_theta=", fitted_theta.tolist())
+    print("synthetic_fitted_theta=", fitted_full.tolist())
     print("synthetic_abs_error=", error.tolist())
-    # 阈值足够宽松，只是为了防止脚本逻辑坏掉。
     if not np.all(error < np.array([5e-3, 5e-3, 5e-3, 0.5, 0.5])):
         raise SystemExit("synthetic test failed")
     print("synthetic_test_passed=true")
@@ -476,8 +479,6 @@ def main() -> int:
     output_dir = args.output_dir or os.path.dirname(os.path.abspath(args.bag))
     os.makedirs(output_dir, exist_ok=True)
 
-    # 主流程：
-    #   bag -> extract_windows -> compute_sample_means -> fit_stage1 -> json/csv + launch snippet
     with rosbag.Bag(args.bag, "r") as bag:
         windows = extract_windows(bag, args.sample_topic, args.min_window_sec)
         if not windows:
@@ -487,8 +488,8 @@ def main() -> int:
     if not samples:
         raise SystemExit("no valid sample means were generated")
 
-    result, initial_theta = fit_stage1(samples, args.l1, args.l2)
-    result_dict = build_result_dict(result, initial_theta, samples, args.l1, args.l2)
+    result, initial_full, fitted_full, initial_l2_m, fitted_l2_m = fit_stage1(samples, args.l1, args.l2, args.fit_mode)
+    result_dict = build_result_dict(args.fit_mode, result, initial_full, fitted_full, samples, args.l1, initial_l2_m, fitted_l2_m)
 
     csv_path = os.path.join(output_dir, "sample_means.csv")
     json_path = os.path.join(output_dir, "fit_result.json")
@@ -496,6 +497,7 @@ def main() -> int:
     with open(json_path, "w") as f:
         json.dump(result_dict, f, indent=2, sort_keys=True)
 
+    print("fit_mode=%s" % args.fit_mode)
     print("sample_count=%d" % len(samples))
     print("sample_csv=%s" % csv_path)
     print("fit_json=%s" % json_path)

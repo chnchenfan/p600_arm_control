@@ -24,9 +24,10 @@
         <param name="L2_m" value="0.262" />
 
         <!-- arm_base 动捕刚体原点相对真实机械臂基座原点的体坐标系平移外参；代码内部按真实基座 = 刚体原点 - R*[dx,dy,dz] 处理 -->
-        <param name="arm_base_offset_x_m" value="0.0" />
-        <param name="arm_base_offset_y_m" value="0.0" />
-        <param name="arm_base_offset_z_m" value="0.0" />
+        <!-- 这组值来自 data/calibration/static/2026324_1，适用前提是已采用“arm1 增大对应 -y”的几何约定。 -->
+        <param name="arm_base_offset_x_m" value="0.024521" />
+        <param name="arm_base_offset_y_m" value="0.004131" />
+        <param name="arm_base_offset_z_m" value="0.058808" />
 
         <!-- 主段圆弧参数：theta 在 [-10, 45] 度间往返变化，驱动 UAV 在 x-z 平面运动 -->
         <param name="theta_min_deg" value="-10.0" />
@@ -72,8 +73,8 @@
         <param name="use_online_joint_calibration" value="true" />
         <param name="online_calibration_samples" value="20" />
         <param name="calibration_max_offset_deg" value="20.0" />
-        <param name="arm1_zero_offset_deg" value="0.0" />
-        <param name="arm2_zero_offset_deg" value="0.0" />
+        <param name="arm1_zero_offset_deg" value="-6.574744" />
+        <param name="arm2_zero_offset_deg" value="16.597306" />
 
         <!-- 动捕与 IK 保护参数 -->
         <param name="pose_timeout_sec" value="0.3" />

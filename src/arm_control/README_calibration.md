@@ -8,6 +8,8 @@ Execution split:
 - Aircraft computer (Ubuntu 18.04 + ROS Melodic): run mocap startup, static sample collection, and rosbag recording
 - Host workstation: copy the recorded bag back and run the offline fitting script
 
+The current experiment-2 geometry convention in this repository is: arm1 increasing moves the end effector toward -y in the arm_base body frame.
+
 The stage-1 implementation in this repository fits:
 
 - `arm_base_offset_x_m`
@@ -38,7 +40,16 @@ cd ~/p600_arm_control
 bash shell/Experiment/uam_mocap.sh exp2 <VRPN_SERVER_IP>
 ```
 
-3. Start static calibration collection. This entrypoint launches the full arm-side chain required for calibration:
+3. Run the static ground IK test before the formal experiment. This entry keeps the UAV fixed and only validates experiment-2 geometry compensation + IK on the arm side:
+
+```bash
+cd ~/p600_arm_control
+bash shell/Experiment/uam_control_desired_exp2_static_ik.sh
+```
+
+Only continue to the formal experiment-2 flight after this static test finishes without continuous IK failure.
+
+4. Start static calibration collection. This entrypoint launches the full arm-side chain required for calibration:
 - arm parameter loading
 - `motors_simulation` topic bridge (`/wjl/arm/guidefly/angle_d -> /wjl/arm/real/angle_d`)
 - `serial_` real-arm driver (`/wjl/arm/real/angle_r`)
@@ -50,7 +61,7 @@ cd ~/p600_arm_control
 bash shell/Experiment/uam_static_calibration_collect.sh
 ```
 
-4. Start calibration recording:
+5. Start calibration recording:
 
 ```bash
 cd ~/p600_arm_control
@@ -77,7 +88,7 @@ python3 /home/cf/Program/code/P600_uam/p600_arm_control/shell/Calibration/fit_st
 
 ### Data definition
 
-The aircraft-side collector publishes 12 fixed static arm configurations. Each valid sample window lasts 2.5 s. The default per-sample convergence timeout is 15.0 s. The collector waits for `/wjl/arm/real/angle_r` from the real arm driver before opening each sample window. The host-side fitter uses `/wjl/calibration/sample_index` to segment the bag automatically.
+The aircraft-side collector publishes 24 fixed static arm configurations for the second-round high-precision dataset. Each valid sample window lasts 2.5 s. The default per-sample convergence timeout is 15.0 s. The collector waits for `/wjl/arm/real/angle_r` from the real arm driver before opening each sample window. The host-side fitter uses `/wjl/calibration/sample_index` to segment the bag automatically.
 
 ### Output
 
@@ -100,7 +111,7 @@ Write these values back to:
 
 ### Upgrade rule
 
-If stage-1 `RMS > 8 mm`, move to stage 2.
+If stage-1 `RMS > 8 mm`, move to stage 2. For the second-round collection, use the built-in 24-pose sequence instead of the older 12-pose set.
 
 ## Stage 2: add arm_target xyz
 
@@ -139,3 +150,12 @@ Recommended acceptance targets:
 - The fitting script is intended to run on the host workstation with Python 3, `numpy`, `scipy`, and `rosbag` available.
 - Do not release all parameters at once in the first iteration.
 - The stage-1 script in this repository implements only the stage-1 parameter set.
+
+
+## Update Log
+
+### 2026-03-24 20:18 CST
+- Fixed the experiment-2 arm1/body-frame sign convention: arm1 increasing now maps to end-effector motion toward -y in the arm_base body frame.
+- Wrote the fitted parameters from `data/calibration/static/2026324_1` back to the experiment-2 launch entry.
+- Added a static ground IK test entrypoint to validate geometry compensation and IK before the formal experiment-2 flight.
+- Upgraded the default static calibration pose set from 12 samples to a 24-pose high-coverage sequence.

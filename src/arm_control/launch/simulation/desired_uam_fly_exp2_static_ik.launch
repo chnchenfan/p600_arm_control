@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<launch>
+    <!--
+        实验二静态逆解测试入口：
+        1. 无人机不发布圆弧轨迹、不走正式实验二状态机；
+        2. 只保留机械臂侧执行链：guidefly/angle_d -> real/angle_d -> serial_ -> real/angle_r；
+        3. 节点在地面冻结一个静态 P_hold，然后持续运行与实验二一致的几何补偿和 IK；
+        4. 用这个入口先验证“几何约定 + 外参 + 零偏”是否自洽，再决定是否进入正式实验二。
+    -->
+    <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />
+
+    <node pkg="arm_control" type="motors_simulation" name="motors_simulation" output="screen" />
+    <node pkg="arm_control" type="serial_" name="serial_" output="screen" />
+
+    <node pkg="arm_control" type="uam_desired_exp2_static_ik" name="uam_desired_exp2_static_ik" output="screen">
+        <param name="base_pose_topic" value="/vrpn_client_node/arm_base/pose" />
+        <param name="ee_pose_topic" value="/vrpn_client_node/arm_target/pose" />
+
+        <param name="settle_time" value="3.0" />
+        <param name="test_duration_sec" value="20.0" />
+
+        <param name="L1_m" value="0.161" />
+        <param name="L2_m" value="0.262" />
+
+        <!-- 这组值来自 data/calibration/static/2026324_1，适用前提是已采用“arm1 增大对应 -y”的几何约定。 -->
+        <param name="arm_base_offset_x_m" value="0.024521" />
+        <param name="arm_base_offset_y_m" value="0.004131" />
+        <param name="arm_base_offset_z_m" value="0.058808" />
+        <param name="arm1_zero_offset_deg" value="-6.574744" />
+        <param name="arm2_zero_offset_deg" value="16.597306" />
+
+        <param name="use_initial_ee_hold" value="true" />
+        <param name="hold_freeze_samples" value="5" />
+        <param name="exp2_hold_ee_x" value="0.0" />
+        <param name="exp2_hold_ee_y" value="0.0" />
+        <param name="exp2_hold_ee_z" value="0.0" />
+
+        <param name="ee_outer_kp" value="0.25" />
+        <param name="ee_outer_clip_m" value="0.03" />
+
+        <param name="pose_timeout_sec" value="0.3" />
+        <param name="eps_r_m" value="0.01" />
+        <param name="eps_xy_m" value="0.015" />
+        <param name="ik_fail_limit" value="10" />
+        <param name="pose_loss_limit" value="10" />
+        <param name="arm1_dot_max_deg_s" value="90.0" />
+        <param name="arm2_dot_max_deg_s" value="90.0" />
+    </node>
+</launch>
