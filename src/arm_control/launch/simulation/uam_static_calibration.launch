@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<launch>
+    <node pkg="arm_control" type="uam_static_calibration_collect" name="uam_static_calibration_collect" output="screen">
+        <param name="publish_rate_hz" value="30.0" />
+        <param name="settle_confirm_sec" value="0.5" />
+        <param name="sample_hold_sec" value="2.5" />
+        <param name="sample_timeout_sec" value="8.0" />
+        <param name="angle_tolerance_deg" value="1.0" />
+        <param name="default_hand_angle_deg" value="0.0" />
+    </node>
+</launch>

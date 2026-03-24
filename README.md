@@ -20,6 +20,8 @@ Key directories:
 - `src/arm_control/shell`: arm-side helper launch scripts
 - `shell/Experiment`: combined experiment startup and rosbag recording scripts
 - `shell/Plot`: offline plotting scripts for experiments 1/2/3/4
+- `src/arm_control/README_calibration.md`: staged static calibration workflow for experiment 2 geometry
+- Static calibration is split as: aircraft-side collection + host-side offline fitting
 
 ## Information Flow
 

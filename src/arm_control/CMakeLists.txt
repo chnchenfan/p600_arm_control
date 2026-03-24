@@ -158,6 +158,10 @@ target_link_libraries(uam_desired_exp3 ${catkin_LIBRARIES})
 add_executable(uam_desired_exp4 src/uam_desired_exp4.cpp)
 add_dependencies(uam_desired_exp4 ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(uam_desired_exp4 ${catkin_LIBRARIES})
+
+add_executable(uam_static_calibration_collect src/uam_static_calibration_collect.cpp)
+add_dependencies(uam_static_calibration_collect ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(uam_static_calibration_collect ${catkin_LIBRARIES})
 #############
 ## Install ##
 #############

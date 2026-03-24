@@ -13,6 +13,7 @@
 - `uam_desired_exp2`: experiment 2 reference generator with `arm_base/arm_target` full-pose compensation
 - `uam_desired_exp3`: experiment 3 reference generator
 - `uam_desired_exp4`: experiment 4 reference generator
+- `uam_static_calibration_collect`: static multi-pose calibration collector
 
 ### Main launch and script entrypoints
 
@@ -26,6 +27,9 @@
 - `shell/desired_uam_fly_exp2.sh`
 - `shell/desired_uam_fly_exp3.sh`
 - `shell/desired_uam_fly_exp4.sh`
+- `launch/simulation/uam_static_calibration.launch`
+- `../../shell/Experiment/uam_static_calibration_collect.sh`
+- `../../README_calibration.md`
 
 ### Main interfaces
 
@@ -85,6 +89,9 @@ This package is the task layer for the UAV-arm experiments. It computes arm and 
 - `shell/desired_uam_fly_exp2.sh`
 - `shell/desired_uam_fly_exp3.sh`
 - `shell/desired_uam_fly_exp4.sh`
+- `launch/simulation/uam_static_calibration.launch`
+- `../../shell/Experiment/uam_static_calibration_collect.sh`
+- `../../README_calibration.md`
 
 ### 主要接口
 
@@ -132,3 +139,10 @@ This package is the task layer for the UAV-arm experiments. It computes arm and 
 - `exp1` / `exp3` 选择 `Tracker0`
 - `exp2` 选择 `arm_base`
 - `exp4` 选择 `arm_target`
+
+### Static calibration split
+
+- Aircraft-side collector: `uam_static_calibration_collect`
+- Aircraft-side recording: `../../shell/Experiment/record_static_calibration_data.sh`
+- Host-side fitting: `../../shell/Calibration/fit_static_geometry_stage1.py`
+- Workflow document: `README_calibration.md`

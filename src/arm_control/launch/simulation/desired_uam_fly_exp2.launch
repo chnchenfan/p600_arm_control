@@ -23,8 +23,10 @@
         <param name="L1_m" value="0.161" />
         <param name="L2_m" value="0.262" />
 
-        <!-- arm_base 动捕刚体原点相对真实机械臂基座原点的 x 正方向偏移；代码内部按真实基座 = 刚体原点 - R*[dx,0,0] 处理 -->
+        <!-- arm_base 动捕刚体原点相对真实机械臂基座原点的体坐标系平移外参；代码内部按真实基座 = 刚体原点 - R*[dx,dy,dz] 处理 -->
         <param name="arm_base_offset_x_m" value="0.0" />
+        <param name="arm_base_offset_y_m" value="0.0" />
+        <param name="arm_base_offset_z_m" value="0.0" />
 
         <!-- 主段圆弧参数：theta 在 [-10, 45] 度间往返变化，驱动 UAV 在 x-z 平面运动 -->
         <param name="theta_min_deg" value="-10.0" />

@@ -199,8 +199,8 @@ Vec3 RotateBodyToWorld(const Vec3 &vector_body, const PoseState &pose) {
 // 若刚体原点位于真实基座 x 正方向前方 dx，则真实基座世界坐标应为：
 //   p_base_true^W = p_rb^W - R_WB * [dx, 0, 0]^T
 // 这里的 dx 以“刚体系 x 正方向前方”为正，代码内部统一做减法。
-Vec3 GetCorrectedBaseWorldPosition(const PoseState &base_pose, double arm_base_offset_x_m) {
-    return SubVec3(base_pose.position, RotateBodyToWorld({arm_base_offset_x_m, 0.0, 0.0}, base_pose));
+Vec3 GetCorrectedBaseWorldPosition(const PoseState &base_pose, const Vec3 &arm_base_offset_body_m) {
+    return SubVec3(base_pose.position, RotateBodyToWorld(arm_base_offset_body_m, base_pose));
 }
 
 // 世界系 -> 机体系 的逆旋转。
@@ -441,6 +441,8 @@ int main(int argc, char *argv[]) {
     double explicit_hold_y = 0.0;
     double explicit_hold_z = 0.0;
     double arm_base_offset_x_m = 0.0;
+    double arm_base_offset_y_m = 0.0;
+    double arm_base_offset_z_m = 0.0;
     std::string base_pose_topic = "/vrpn_client_node/arm_base/pose";
     std::string ee_pose_topic = "/vrpn_client_node/arm_target/pose";
     std::string local_pose_topic = "/mavros/local_position/pose";
@@ -476,6 +478,8 @@ int main(int argc, char *argv[]) {
     pnh.param("exp2_hold_ee_y", explicit_hold_y, explicit_hold_y);
     pnh.param("exp2_hold_ee_z", explicit_hold_z, explicit_hold_z);
     pnh.param("arm_base_offset_x_m", arm_base_offset_x_m, arm_base_offset_x_m);
+    pnh.param("arm_base_offset_y_m", arm_base_offset_y_m, arm_base_offset_y_m);
+    pnh.param("arm_base_offset_z_m", arm_base_offset_z_m, arm_base_offset_z_m);
     pnh.param("base_pose_topic", base_pose_topic, base_pose_topic);
     pnh.param("ee_pose_topic", ee_pose_topic, ee_pose_topic);
     pnh.param("local_pose_topic", local_pose_topic, local_pose_topic);
@@ -550,8 +554,9 @@ int main(int argc, char *argv[]) {
 
     ROS_INFO("exp2 service ready, waiting for /wjl/start/uav_desired");
     ROS_INFO(
-        "exp2 params: base_topic=%s, ee_topic=%s, local_topic=%s, L1=%.3f, L2=%.3f, theta=[%.1f, %.1f], T=%.2f, settle=%.2f, exp=%.2f, recovery=%.2f, local_mapping=%s, online_calib=%s",
+        "exp2 params: base_topic=%s, ee_topic=%s, local_topic=%s, L1=%.3f, L2=%.3f, base_offset=[%.3f, %.3f, %.3f], theta=[%.1f, %.1f], T=%.2f, settle=%.2f, exp=%.2f, recovery=%.2f, local_mapping=%s, online_calib=%s",
         base_pose_topic.c_str(), ee_pose_topic.c_str(), local_pose_topic.c_str(), l1_m, l2_m,
+        arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m,
         theta_min_deg, theta_max_deg, theta_period_sec, settle_time, experiment_time, recovery_time,
         use_local_pose_mapping ? "true" : "false", use_online_joint_calibration ? "true" : "false");
 
@@ -608,7 +613,8 @@ int main(int argc, char *argv[]) {
     bool force_recovery = false;
     double last_valid_arm1_deg = current_angle.arm1_angle;
     double last_valid_arm2_deg = current_angle.arm2_angle;
-    Vec3 last_uav_world_command = g_base_pose.valid ? GetCorrectedBaseWorldPosition(g_base_pose, arm_base_offset_x_m) : Vec3{0.0, 0.0, 0.0};
+    const Vec3 arm_base_offset_body_m{arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m};
+    Vec3 last_uav_world_command = g_base_pose.valid ? GetCorrectedBaseWorldPosition(g_base_pose, arm_base_offset_body_m) : Vec3{0.0, 0.0, 0.0};
     Vec3 recovery_start_world = last_uav_world_command;
     double recovery_start_arm1_deg = last_valid_arm1_deg;
     double recovery_start_arm2_deg = last_valid_arm2_deg;
@@ -676,7 +682,7 @@ int main(int argc, char *argv[]) {
         const bool base_fresh = IsPoseFresh(g_base_pose, now, pose_timeout_sec); // true = 数据新鲜，没有超时
         const bool ee_fresh = IsPoseFresh(g_ee_pose, now, pose_timeout_sec);
         const bool local_fresh = IsPoseFresh(g_local_pose, now, pose_timeout_sec);
-        const Vec3 base_world_position = GetCorrectedBaseWorldPosition(g_base_pose, arm_base_offset_x_m);
+        const Vec3 base_world_position = GetCorrectedBaseWorldPosition(g_base_pose, arm_base_offset_body_m);
 
         if (stage == 0) {
             // 稳定段：
@@ -972,11 +978,12 @@ int main(int argc, char *argv[]) {
             const double ee_error_norm =
                 (ee_hold_initialized && g_ee_pose.valid) ? NormVec3(SubVec3(ee_hold_world, g_ee_pose.position)) : -1.0;
             ROS_INFO(
-                "[%s] t=%.2f s, pose_d=(%.2f, %.2f, %.2f, %.2f), arm_d=(%.2f, %.2f, %.2f), base_fresh=%s, ee_fresh=%s, ee_err=%.4f, pose_loss=%d, ik_fail=%d, offset=(%.2f, %.2f), base_dx=%.4f",
+                "[%s] t=%.2f s, pose_d=(%.2f, %.2f, %.2f, %.2f), arm_d=(%.2f, %.2f, %.2f), base_fresh=%s, ee_fresh=%s, ee_err=%.4f, pose_loss=%d, ik_fail=%d, offset=(%.2f, %.2f), base_offset=(%.4f, %.4f, %.4f)",
                 StageName(stage), elapsed, uav_pos_d.x_d, uav_pos_d.y_d, uav_pos_d.z_d, uav_pos_d.yaw_d,
                 current_angle.arm1_angle, current_angle.arm2_angle, current_angle.hand_angle,
                 base_fresh ? "true" : "false", ee_fresh ? "true" : "false", ee_error_norm,
-                pose_loss_count, ik_fail_count, calibrated_arm1_zero_offset_deg, calibrated_arm2_zero_offset_deg, arm_base_offset_x_m);
+                pose_loss_count, ik_fail_count, calibrated_arm1_zero_offset_deg, calibrated_arm2_zero_offset_deg,
+                arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m);
         }
 
         uav_pos_d_pub.publish(uav_pos_d);
