@@ -1,17 +1,53 @@
 <?xml version="1.0"?>
 <launch>
+    <!--
+        静态标定真机链路说明：
+        1. 先加载机械臂基础参数（串口名、关节限位、模型名等）；
+        2. 起 motors_simulation 节点：
+           /wjl/arm/guidefly/angle_d  ->  /wjl/arm/real/angle_d
+           它在这里不是为了 Gazebo 仿真，而是复用现有“期望角 -> 真机角命令”的桥接逻辑；
+        3. 起 serial_ 节点：
+           /wjl/arm/real/angle_d      ->  串口发给步进电机
+           步进电机反馈                ->  /wjl/arm/real/angle_r
+        4. 起 uam_static_calibration_collect 节点：
+           逐个发布静态样本姿态，并根据 /wjl/arm/real/angle_r 判断是否真正到位；
+        5. 录包脚本只需要额外录下上面这些话题，后处理即可自动分段和拟合。
+    -->
     <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />
 
-    <!-- Reuse the same real-arm command/feedback chain as exp2. -->
+    <!--
+        话题桥：
+        collector 发布 /wjl/arm/guidefly/angle_d，
+        motors_simulation 负责限幅并转发到 /wjl/arm/real/angle_d。
+    -->
     <node pkg="arm_control" type="motors_simulation" name="motors_simulation" output="screen" />
+
+    <!--
+        真机串口驱动：
+        订阅 /wjl/arm/real/angle_d，
+        发布 /wjl/arm/real/angle_r 和 /wjl/arm/real/angle_error。
+    -->
     <node pkg="arm_control" type="serial_" name="serial_" output="screen" />
 
+    <!--
+        静态标定采样节点：
+        - 发布目标角到 /wjl/arm/guidefly/angle_d
+        - 读取 /wjl/arm/real/angle_r 作为真机反馈
+        - 进入有效采样窗口时，把 /wjl/calibration/sample_index 切成 0..N-1
+        - 非有效采样阶段发布 -1，方便录包后自动切段
+    -->
     <node pkg="arm_control" type="uam_static_calibration_collect" name="uam_static_calibration_collect" output="screen">
+        <!-- 发布控制频率 -->
         <param name="publish_rate_hz" value="30.0" />
+        <!-- 到位判定时，误差持续小于阈值的确认时间 -->
         <param name="settle_confirm_sec" value="0.5" />
+        <!-- 每个有效样本窗口持续时间；录包后对这段数据取均值 -->
         <param name="sample_hold_sec" value="2.5" />
+        <!-- 单个样本从发目标到收敛的最长允许时间 -->
         <param name="sample_timeout_sec" value="15.0" />
+        <!-- 到位判定角度阈值，单位 deg -->
         <param name="angle_tolerance_deg" value="1.0" />
+        <!-- 如果启动时尚未读到手爪反馈，先用这个默认值保持手爪角不动 -->
         <param name="default_hand_angle_deg" value="0.0" />
     </node>
 </launch>

@@ -10,6 +10,8 @@
 
 namespace {
 
+// 保存最近一次真机机械臂反馈。
+// 这里的数据来自 /wjl/arm/real/angle_r，不是动捕，而是串口驱动从步进电机回读后的角度。
 struct ArmState {
     bool valid = false;
     double arm1_deg = 0.0;
@@ -19,6 +21,7 @@ struct ArmState {
 
 ArmState g_real_arm_state;
 
+// 真机反馈回调：持续刷新当前真实关节角。
 void ArmRealCb(const uam_message::arm_angle::ConstPtr &msg) {
     g_real_arm_state.valid = true;
     g_real_arm_state.arm1_deg = msg->arm1_angle;
@@ -26,10 +29,14 @@ void ArmRealCb(const uam_message::arm_angle::ConstPtr &msg) {
     g_real_arm_state.hand_deg = msg->hand_angle;
 }
 
+// 用于判定两个关节中“最坏的那个误差”是否已经进入容差范围。
 double AbsMax(double a, double b) {
     return std::max(std::fabs(a), std::fabs(b));
 }
 
+// 默认静态采样姿态序列。
+// 这些点的顺序不是随便排的，而是尽量让相邻样本之间的关节变化更平滑，
+// 避免真机在大幅反向跳变时收敛超时。
 std::vector<std::pair<double, double>> DefaultSamples() {
     return {
         {-60.0, 0.0},
@@ -54,6 +61,7 @@ int main(int argc, char **argv) {
     ros::NodeHandle nh;
     ros::NodeHandle pnh("~");
 
+    // 下面这些参数共同决定“什么时候认为某组姿态到位，什么时候开始记样本”。
     double publish_rate_hz = 30.0;
     double settle_confirm_sec = 0.5;
     double sample_hold_sec = 2.5;
@@ -86,6 +94,12 @@ int main(int argc, char **argv) {
 
     const std::vector<std::pair<double, double>> samples = DefaultSamples();
 
+    // 信息流：
+    // 1. arm_pub 向 /wjl/arm/guidefly/angle_d 发布当前目标角；
+    // 2. motors_simulation 把它桥接到 /wjl/arm/real/angle_d；
+    // 3. serial_ 读 /wjl/arm/real/angle_d 后驱动真机，并把反馈发到 /wjl/arm/real/angle_r；
+    // 4. 本节点再订阅 /wjl/arm/real/angle_r，用于判断收敛；
+    // 5. 本节点额外发布 /wjl/calibration/sample_index，给录包和拟合脚本做“有效样本标签”。
     ros::Publisher arm_pub = nh.advertise<uam_message::arm_angle>("/wjl/arm/guidefly/angle_d", 10);
     ros::Publisher sample_index_pub = nh.advertise<std_msgs::Int32>("/wjl/calibration/sample_index", 10, true);
     ros::Subscriber arm_sub = nh.subscribe<uam_message::arm_angle>("/wjl/arm/real/angle_r", 10, ArmRealCb);
@@ -93,6 +107,8 @@ int main(int argc, char **argv) {
     ROS_INFO("static calibration collector ready: %zu samples, hold=%.2f s, confirm=%.2f s, tol=%.2f deg, timeout=%.2f s",
              samples.size(), sample_hold_sec, settle_confirm_sec, angle_tolerance_deg, sample_timeout_sec);
 
+    // kMove：向目标姿态运动，但 sample_index=-1，不把数据计入拟合；
+    // kSample：已确认到位，sample_index=当前样本号，这段数据才用于后处理取均值。
     enum class Stage {
         kMove,
         kSample,
@@ -115,6 +131,8 @@ int main(int argc, char **argv) {
         ros::spinOnce();
         const ros::Time now = ros::Time::now();
 
+        // 手爪角在整个静态标定过程中保持不动。
+        // 如果已经收到真机反馈，就锁定为启动时的真实手爪角；否则用默认值。
         if (!hand_initialized && g_real_arm_state.valid) {
             hand_angle_deg = g_real_arm_state.hand_deg;
             hand_initialized = true;
@@ -130,12 +148,16 @@ int main(int argc, char **argv) {
         const double target_arm1 = samples[sample_idx].first;
         const double target_arm2 = samples[sample_idx].second;
 
+        // 连续发布目标角，保证即使串口侧或桥接节点短暂丢帧，目标仍会被刷新。
         uam_message::arm_angle cmd;
         cmd.arm1_angle = target_arm1;
         cmd.arm2_angle = target_arm2;
         cmd.hand_angle = hand_angle_deg;
         arm_pub.publish(cmd);
 
+        // sample_index 的意义：
+        // -1  表示当前处于移动/收敛阶段；
+        // >=0 表示当前处于有效采样窗口，录包和拟合脚本会按这个编号切段。
         sample_index_msg.data = (stage == Stage::kSample) ? static_cast<int>(sample_idx) : -1;
         sample_index_pub.publish(sample_index_msg);
 
@@ -150,6 +172,8 @@ int main(int argc, char **argv) {
         const bool within_tolerance = AbsMax(arm1_error, arm2_error) <= angle_tolerance_deg;
 
         if (stage == Stage::kMove) {
+            // 收敛判定不是“瞬间误差进阈值”就算完成，而是必须持续一段 settle_confirm_sec。
+            // 这样可以避免机械臂在阈值边缘来回抖动时误触发采样。
             if (within_tolerance) {
                 if (tolerance_hold_start.isZero()) {
                     tolerance_hold_start = now;
@@ -166,6 +190,7 @@ int main(int argc, char **argv) {
                 tolerance_hold_start = ros::Time();
             }
 
+            // 如果长时间无法到位，直接报错退出，避免录到质量很差的伪静态样本。
             if ((now - stage_start).toSec() > sample_timeout_sec) {
                 ROS_ERROR("static calibration sample %zu/%zu failed to converge within %.2f s: target=(%.1f, %.1f), real=(%.2f, %.2f), error=(%.2f, %.2f)",
                           sample_idx + 1, samples.size(), sample_timeout_sec,
@@ -175,6 +200,8 @@ int main(int argc, char **argv) {
                 return 1;
             }
         } else {
+            // 一旦进入有效窗口，就固定保持 sample_hold_sec。
+            // 后处理脚本会在这段窗口内对动捕和角度数据做均值。
             if ((now - sample_start).toSec() >= sample_hold_sec) {
                 ROS_INFO("static calibration sample %zu/%zu completed: target=(%.1f, %.1f), real=(%.2f, %.2f)",
                          sample_idx + 1, samples.size(), target_arm1, target_arm2,
