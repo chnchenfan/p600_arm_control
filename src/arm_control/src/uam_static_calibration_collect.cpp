@@ -33,17 +33,17 @@ double AbsMax(double a, double b) {
 std::vector<std::pair<double, double>> DefaultSamples() {
     return {
         {-60.0, 0.0},
-        {-30.0, 0.0},
-        {0.0, 0.0},
-        {30.0, 0.0},
-        {60.0, 0.0},
         {-45.0, 15.0},
-        {-15.0, 15.0},
-        {15.0, 15.0},
-        {45.0, 15.0},
         {-30.0, 30.0},
+        {-30.0, 0.0},
+        {-15.0, 15.0},
         {0.0, 30.0},
+        {0.0, 0.0},
+        {15.0, 15.0},
         {30.0, 30.0},
+        {30.0, 0.0},
+        {45.0, 15.0},
+        {60.0, 0.0},
     };
 }
 
@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
     double publish_rate_hz = 30.0;
     double settle_confirm_sec = 0.5;
     double sample_hold_sec = 2.5;
-    double sample_timeout_sec = 8.0;
+    double sample_timeout_sec = 15.0;
     double angle_tolerance_deg = 1.0;
     double default_hand_angle_deg = 0.0;
 
@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
         sample_hold_sec = 2.5;
     }
     if (sample_timeout_sec <= 0.0) {
-        sample_timeout_sec = 8.0;
+        sample_timeout_sec = 15.0;
     }
     if (angle_tolerance_deg <= 0.0) {
         angle_tolerance_deg = 1.0;

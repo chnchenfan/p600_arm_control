@@ -77,7 +77,7 @@ python3 /home/cf/Program/code/P600_uam/p600_arm_control/shell/Calibration/fit_st
 
 ### Data definition
 
-The aircraft-side collector publishes 12 fixed static arm configurations. Each valid sample window lasts 2.5 s. The collector waits for `/wjl/arm/real/angle_r` from the real arm driver before opening each sample window. The host-side fitter uses `/wjl/calibration/sample_index` to segment the bag automatically.
+The aircraft-side collector publishes 12 fixed static arm configurations. Each valid sample window lasts 2.5 s. The default per-sample convergence timeout is 15.0 s. The collector waits for `/wjl/arm/real/angle_r` from the real arm driver before opening each sample window. The host-side fitter uses `/wjl/calibration/sample_index` to segment the bag automatically.
 
 ### Output
 
