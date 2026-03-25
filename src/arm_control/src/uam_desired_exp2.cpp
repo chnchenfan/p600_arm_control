@@ -435,11 +435,14 @@ int main(int argc, char *argv[]) {
     double arm1_dot_max_deg_s = 90.0;
     double arm2_dot_max_deg_s = 90.0;
     bool startup_zero_enabled = true;
+    bool startup_motion_check_enabled = true;
     double startup_zero_timeout_sec = 20.0;
     double startup_zero_hold_sec = 0.5;
     double startup_zero_tolerance_deg = 1.0;
     double startup_zero_arm1_deg = 0.0;
     double startup_zero_arm2_deg = 0.0;
+    double startup_motion_check_arm1_deg = -5.0;
+    double startup_motion_check_arm2_deg = 0.0;
     double hold_freeze_samples = 1.0;
     bool use_local_pose_mapping = true;
     bool use_initial_ee_hold = true; // 当前末端位置自动冻结固定点标志位，true为启用，false为不启用
@@ -478,11 +481,14 @@ int main(int argc, char *argv[]) {
     pnh.param("arm1_dot_max_deg_s", arm1_dot_max_deg_s, arm1_dot_max_deg_s);
     pnh.param("arm2_dot_max_deg_s", arm2_dot_max_deg_s, arm2_dot_max_deg_s);
     pnh.param("startup_zero_enabled", startup_zero_enabled, startup_zero_enabled);
+    pnh.param("startup_motion_check_enabled", startup_motion_check_enabled, startup_motion_check_enabled);
     pnh.param("startup_zero_timeout_sec", startup_zero_timeout_sec, startup_zero_timeout_sec);
     pnh.param("startup_zero_hold_sec", startup_zero_hold_sec, startup_zero_hold_sec);
     pnh.param("startup_zero_tolerance_deg", startup_zero_tolerance_deg, startup_zero_tolerance_deg);
     pnh.param("startup_zero_arm1_deg", startup_zero_arm1_deg, startup_zero_arm1_deg);
     pnh.param("startup_zero_arm2_deg", startup_zero_arm2_deg, startup_zero_arm2_deg);
+    pnh.param("startup_motion_check_arm1_deg", startup_motion_check_arm1_deg, startup_motion_check_arm1_deg);
+    pnh.param("startup_motion_check_arm2_deg", startup_motion_check_arm2_deg, startup_motion_check_arm2_deg);
     pnh.param("hold_freeze_samples", hold_freeze_samples, hold_freeze_samples);
     pnh.param("use_local_pose_mapping", use_local_pose_mapping, use_local_pose_mapping);
     pnh.param("use_initial_ee_hold", use_initial_ee_hold, use_initial_ee_hold);
@@ -583,12 +589,12 @@ int main(int argc, char *argv[]) {
         use_local_pose_mapping ? "true" : "false", use_online_joint_calibration ? "true" : "false");
 
     ros::Rate rate(30.0);
-    bool startup_zero_done = !startup_zero_enabled;
-    ros::Time startup_zero_start = ros::Time::now();
+    int startup_phase = startup_zero_enabled ? (startup_motion_check_enabled ? 0 : 1) : 2;
+    ros::Time startup_phase_start = ros::Time::now();
     ros::Time startup_zero_hold_start;
     double startup_zero_hand_deg = 0.0;
     bool startup_zero_hand_initialized = false;
-    while (ros::ok() && (!start_flag || !startup_zero_done)) {
+    while (ros::ok() && (!start_flag || startup_phase != 2)) {
         ros::spinOnce();
 
         if (startup_zero_enabled) {
@@ -598,14 +604,16 @@ int main(int argc, char *argv[]) {
             }
 
             uam_message::arm_angle startup_zero_cmd;
-            startup_zero_cmd.arm1_angle = Clamp(startup_zero_arm1_deg, arm1_min, arm1_max);
-            startup_zero_cmd.arm2_angle = Clamp(startup_zero_arm2_deg, arm2_min, arm2_max);
+            startup_zero_cmd.arm1_angle = Clamp(startup_phase == 0 ? startup_motion_check_arm1_deg : startup_zero_arm1_deg,
+                                                arm1_min, arm1_max);
+            startup_zero_cmd.arm2_angle = Clamp(startup_phase == 0 ? startup_motion_check_arm2_deg : startup_zero_arm2_deg,
+                                                arm2_min, arm2_max);
             startup_zero_cmd.hand_angle = startup_zero_hand_initialized ? startup_zero_hand_deg : 0.0;
             joint_angle_pub.publish(startup_zero_cmd);
 
-            if (!startup_zero_done) {
+            if (startup_phase != 2) {
                 if (!g_real_arm_state.valid) {
-                    ROS_WARN_THROTTLE(1.0, "exp2 startup zero waiting for /wjl/arm/real/angle_r");
+                    ROS_WARN_THROTTLE(1.0, "exp2 startup sequence waiting for /wjl/arm/real/angle_r");
                 } else {
                     const double arm1_error = startup_zero_cmd.arm1_angle - g_real_arm_state.arm1_deg;
                     const double arm2_error = startup_zero_cmd.arm2_angle - g_real_arm_state.arm2_deg;
@@ -616,18 +624,28 @@ int main(int argc, char *argv[]) {
                             startup_zero_hold_start = ros::Time::now();
                         }
                         if ((ros::Time::now() - startup_zero_hold_start).toSec() >= startup_zero_hold_sec) {
-                            startup_zero_done = true;
-                            ROS_INFO("exp2 startup zero finished: target=(%.1f, %.1f), real=(%.2f, %.2f)",
-                                     startup_zero_cmd.arm1_angle, startup_zero_cmd.arm2_angle,
-                                     g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg);
+                            if (startup_phase == 0) {
+                                ROS_INFO("exp2 startup motion check finished: target=(%.1f, %.1f), real=(%.2f, %.2f)",
+                                         startup_zero_cmd.arm1_angle, startup_zero_cmd.arm2_angle,
+                                         g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg);
+                                startup_phase = 1;
+                                startup_phase_start = ros::Time::now();
+                                startup_zero_hold_start = ros::Time();
+                            } else {
+                                startup_phase = 2;
+                                ROS_INFO("exp2 startup zero finished: target=(%.1f, %.1f), real=(%.2f, %.2f)",
+                                         startup_zero_cmd.arm1_angle, startup_zero_cmd.arm2_angle,
+                                         g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg);
+                            }
                         }
                     } else {
                         startup_zero_hold_start = ros::Time();
                     }
 
-                    if ((ros::Time::now() - startup_zero_start).toSec() > startup_zero_timeout_sec) {
-                        ROS_ERROR("exp2 startup zero failed within %.2f s: target=(%.1f, %.1f), real=(%.2f, %.2f), error=(%.2f, %.2f)",
-                                  startup_zero_timeout_sec, startup_zero_cmd.arm1_angle, startup_zero_cmd.arm2_angle,
+                    const char *active_label = (startup_phase == 0) ? "startup motion check" : "startup zero";
+                    if ((ros::Time::now() - startup_phase_start).toSec() > startup_zero_timeout_sec) {
+                        ROS_ERROR("exp2 %s failed within %.2f s: target=(%.1f, %.1f), real=(%.2f, %.2f), error=(%.2f, %.2f)",
+                                  active_label, startup_zero_timeout_sec, startup_zero_cmd.arm1_angle, startup_zero_cmd.arm2_angle,
                                   g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg, arm1_error, arm2_error);
                         return 1;
                     }

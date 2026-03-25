@@ -89,13 +89,16 @@
 
         <!--
             上电归零阶段：
-            在等待 /wjl/start/uav_desired 服务触发时，先持续给机械臂发送 (0, 0) 命令；
-            只有确认 /wjl/arm/real/angle_r 已经到位，实验二状态机才允许继续。
+            在等待 /wjl/start/uav_desired 服务触发时，先做一次小幅试动，再回到 (0, 0)；
+            只有确认 /wjl/arm/real/angle_r 对试动和归零都产生正确反馈，实验二状态机才允许继续。
         -->
         <param name="startup_zero_enabled" value="true" />
+        <param name="startup_motion_check_enabled" value="true" />
         <param name="startup_zero_timeout_sec" value="20.0" />
         <param name="startup_zero_hold_sec" value="0.5" />
         <param name="startup_zero_tolerance_deg" value="1.0" />
+        <param name="startup_motion_check_arm1_deg" value="-5.0" />
+        <param name="startup_motion_check_arm2_deg" value="0.0" />
         <param name="startup_zero_arm1_deg" value="0.0" />
         <param name="startup_zero_arm2_deg" value="0.0" />
     </node>
