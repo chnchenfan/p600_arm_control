@@ -42,7 +42,20 @@ void Motors_s::Pos_target_cb(const boost::shared_ptr<const uam_message::arm_angl
     arm1.limit_check();
     arm2.limit_check();
     left_hand.limit_check();
-    pos_real_pub.publish(msg);
+
+    // 这里真正发往真机串口层的应该是“限幅后的命令”，而不是原始输入消息。
+    // 这样一来，/wjl/arm/real/angle_d 才能真实反映 motors_simulation 这一层输出到执行链的目标角。
+    uam_message::arm_angle real_cmd_msg;
+    real_cmd_msg.arm1_angle = arm1.pos_angle_s;
+    real_cmd_msg.arm2_angle = arm2.pos_angle_s;
+    real_cmd_msg.hand_angle = left_hand.pos_angle_s;
+    pos_real_pub.publish(real_cmd_msg);
+
+    ROS_INFO_THROTTLE(1.0,
+                      "motors_simulation bridge: guidefly=(%.2f, %.2f, %.2f) -> real_d=(%.2f, %.2f, %.2f)",
+                      msg->arm1_angle, msg->arm2_angle, msg->hand_angle,
+                      real_cmd_msg.arm1_angle, real_cmd_msg.arm2_angle, real_cmd_msg.hand_angle);
+
     arm1.Pos_gazebo_pub();
     arm2.Pos_gazebo_pub();
     left_hand.Pos_gazebo_pub();

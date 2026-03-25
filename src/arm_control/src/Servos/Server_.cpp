@@ -158,4 +158,7 @@ void Servers_::Pos_target_cb(const boost::shared_ptr<const uam_message::arm_angl
     server1.pos_angle_s=msg->arm1_angle;
     server2.pos_angle_s=msg->arm2_angle;
     server3.pos_angle_s=msg->hand_angle;
+    ROS_INFO_THROTTLE(1.0,
+                      "serial target callback: real_d=(%.2f, %.2f, %.2f)",
+                      server1.pos_angle_s, server2.pos_angle_s, server3.pos_angle_s);
 }

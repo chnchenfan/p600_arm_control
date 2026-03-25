@@ -62,6 +62,12 @@ void Linux_serial::Send_all_data(){
     ros::Duration(command_gap_sec).sleep();
     servers.Arm_angle_pub();// 发布角度
 
+    ROS_INFO_THROTTLE(1.0,
+                      "serial loop: desired=(%.2f, %.2f, %.2f), feedback=(%.2f, %.2f, %.2f), error=(%.2f, %.2f, %.2f)",
+                      servers.server1.pos_angle_s, servers.server2.pos_angle_s, servers.server3.pos_angle_s,
+                      servers.server1.pos_angle_r, servers.server2.pos_angle_r, servers.server3.pos_angle_r,
+                      servers.server1.pos_error, servers.server2.pos_error, servers.server3.pos_error);
+
 }
 
 
