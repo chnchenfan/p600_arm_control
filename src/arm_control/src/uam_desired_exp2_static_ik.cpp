@@ -71,6 +71,17 @@ struct RunMetrics {
     int pose_loss_events = 0;
 };
 
+struct FreezeDiagnostics {
+    double freeze_real_arm1_deg = 0.0;
+    double freeze_real_arm2_deg = 0.0;
+    double freeze_ik_arm1_deg = 0.0;
+    double freeze_ik_arm2_deg = 0.0;
+    double freeze_delta_arm1_deg = 0.0;
+    double freeze_delta_arm2_deg = 0.0;
+    double freeze_fk_hold_error_m = -1.0;
+    bool valid = false;
+};
+
 PoseState g_base_pose;
 PoseState g_ee_pose;
 ArmState g_real_arm_state;
@@ -171,6 +182,22 @@ Vec3 RotateWorldToBody(const Vec3 &vector_world, const PoseState &pose) {
 
 Vec3 GetCorrectedBaseWorldPosition(const PoseState &base_pose, const Vec3 &arm_base_offset_body_m) {
     return SubVec3(base_pose.position, RotateBodyToWorld(arm_base_offset_body_m, base_pose));
+}
+
+Vec3 ForwardKinematicsHoldPointBody(double arm1_deg,
+                                    double arm2_deg,
+                                    double arm1_zero_offset_deg,
+                                    double arm2_zero_offset_deg,
+                                    double l1_m,
+                                    double l2_m) {
+    const double q1 = DegToRad(arm1_deg + arm1_zero_offset_deg);
+    const double q2 = DegToRad(arm2_deg + arm2_zero_offset_deg);
+    const Vec3 p_rel{
+        l2_m * std::cos(q2) * std::cos(q1),
+        -l2_m * std::cos(q2) * std::sin(q1),
+        l2_m * std::sin(q2),
+    };
+    return AddVec3(p_rel, Vec3{0.0, 0.0, -l1_m});
 }
 
 bool IsPoseFresh(const PoseState &pose, const ros::Time &now, double timeout_sec) {
@@ -359,6 +386,54 @@ ControlResult ComputeControl(const PoseState &measured_base_pose,
     return result;
 }
 
+FreezeDiagnostics ComputeFreezeDiagnostics(const PoseState &base_pose,
+                                          const Vec3 &ee_hold_world,
+                                          const Vec3 &arm_base_offset_body_m,
+                                          double real_arm1_deg,
+                                          double real_arm2_deg,
+                                          double l1_m,
+                                          double l2_m,
+                                          double arm1_zero_offset_deg,
+                                          double arm2_zero_offset_deg,
+                                          double arm1_min,
+                                          double arm1_max,
+                                          double arm2_min,
+                                          double arm2_max,
+                                          double eps_r_m,
+                                          double eps_xy_m) {
+    FreezeDiagnostics diag;
+    const Vec3 corrected_base_world = GetCorrectedBaseWorldPosition(base_pose, arm_base_offset_body_m);
+    const Vec3 hold_offset_world = SubVec3(ee_hold_world, corrected_base_world);
+    const Vec3 hold_body = RotateWorldToBody(hold_offset_world, base_pose);
+    const Vec3 fk_hold_body = ForwardKinematicsHoldPointBody(real_arm1_deg, real_arm2_deg,
+                                                             arm1_zero_offset_deg, arm2_zero_offset_deg,
+                                                             l1_m, l2_m);
+    diag.freeze_fk_hold_error_m = NormVec3(SubVec3(hold_body, fk_hold_body));
+    diag.freeze_real_arm1_deg = real_arm1_deg;
+    diag.freeze_real_arm2_deg = real_arm2_deg;
+
+    double solved_arm1_deg = real_arm1_deg;
+    double solved_arm2_deg = real_arm2_deg;
+    double reach_error = -1.0;
+    const Vec3 target_rel = SubVec3(hold_body, Vec3{0.0, 0.0, -l1_m});
+    const bool solved = SolveInverseKinematics(target_rel, l2_m,
+                                               real_arm1_deg, real_arm2_deg,
+                                               arm1_zero_offset_deg, arm2_zero_offset_deg,
+                                               arm1_min, arm1_max, arm2_min, arm2_max,
+                                               eps_r_m, eps_xy_m,
+                                               &solved_arm1_deg, &solved_arm2_deg, &reach_error);
+    if (!solved) {
+        return diag;
+    }
+
+    diag.freeze_ik_arm1_deg = solved_arm1_deg;
+    diag.freeze_ik_arm2_deg = solved_arm2_deg;
+    diag.freeze_delta_arm1_deg = solved_arm1_deg - real_arm1_deg;
+    diag.freeze_delta_arm2_deg = solved_arm2_deg - real_arm2_deg;
+    diag.valid = true;
+    return diag;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -499,6 +574,7 @@ int main(int argc, char *argv[]) {
     ros::Time in_tolerance_since;
     bool in_tolerance = false;
     RunMetrics metrics;
+    FreezeDiagnostics freeze_diag;
 
     auto ResetHoldCapture = [&]() {
         hold_initialized = false;
@@ -511,6 +587,7 @@ int main(int argc, char *argv[]) {
         metrics = RunMetrics();
         ik_fail_count = 0;
         pose_loss_count = 0;
+        freeze_diag = FreezeDiagnostics();
     };
 
     auto PublishCurrent = [&]() {
@@ -740,6 +817,20 @@ int main(int argc, char *argv[]) {
             current_angle.arm2_angle = target_preposition_arm2;
             PublishCurrent();
             if (HoldCaptureTick(now, preposition_virtual ? "exp2 validation virtual" : "exp2 validation static")) {
+                if (g_real_arm_state.valid && g_base_pose.valid) {
+                    freeze_diag = ComputeFreezeDiagnostics(g_base_pose, ee_hold_world, arm_base_offset_body_m,
+                                                           g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg,
+                                                           l1_m, l2_m,
+                                                           arm1_zero_offset_deg, arm2_zero_offset_deg,
+                                                           arm1_min, arm1_max, arm2_min, arm2_max,
+                                                           eps_r_m, eps_xy_m);
+                    ROS_INFO("%s freeze diagnostics: real=(%.2f, %.2f), ik=(%.2f, %.2f), delta=(%.2f, %.2f), fk_hold_error_m=%.4f, solved=%s",
+                             preposition_virtual ? "exp2 validation virtual" : "exp2 validation static",
+                             freeze_diag.freeze_real_arm1_deg, freeze_diag.freeze_real_arm2_deg,
+                             freeze_diag.freeze_ik_arm1_deg, freeze_diag.freeze_ik_arm2_deg,
+                             freeze_diag.freeze_delta_arm1_deg, freeze_diag.freeze_delta_arm2_deg,
+                             freeze_diag.freeze_fk_hold_error_m, freeze_diag.valid ? "true" : "false");
+                }
                 phase_start = now;
                 ResetMetrics();
                 suite_phase = (suite_phase == SuitePhase::kFreezeStaticHold) ? SuitePhase::kRunStatic : SuitePhase::kRunVirtual;
@@ -787,10 +878,14 @@ int main(int argc, char *argv[]) {
             if ((now - phase_start).toSec() >= static_case_duration_sec) {
                 const bool passed = metrics.ik_fail_events == 0 && metrics.pose_loss_events == 0 &&
                                     metrics.max_reach_error <= eps_r_m && metrics.final_hold_error <= hold_error_pass_m;
-                ROS_INFO("exp2 validation static case summary: case_index=%zu, initial_pose=(%.1f, %.1f), reach_error_max=%.4f, hold_error_final_m=%.4f, hold_error_max_m=%.4f, ik_fail_count=%d, pose_loss_count=%d, pass=%s",
+                ROS_INFO("exp2 validation static case summary: case_index=%zu, initial_pose=(%.1f, %.1f), reach_error_max=%.4f, hold_error_final_m=%.4f, hold_error_max_m=%.4f, ik_fail_count=%d, pose_loss_count=%d, freeze_real=(%.2f, %.2f), freeze_ik=(%.2f, %.2f), freeze_delta=(%.2f, %.2f), freeze_fk_hold_error_m=%.4f, pass=%s",
                          active_case_index + 1, current_case.arm1_deg, current_case.arm2_deg,
                          metrics.max_reach_error, metrics.final_hold_error, metrics.max_hold_error,
-                         metrics.ik_fail_events, metrics.pose_loss_events, passed ? "true" : "false");
+                         metrics.ik_fail_events, metrics.pose_loss_events,
+                         freeze_diag.freeze_real_arm1_deg, freeze_diag.freeze_real_arm2_deg,
+                         freeze_diag.freeze_ik_arm1_deg, freeze_diag.freeze_ik_arm2_deg,
+                         freeze_diag.freeze_delta_arm1_deg, freeze_diag.freeze_delta_arm2_deg,
+                         freeze_diag.freeze_fk_hold_error_m, passed ? "true" : "false");
                 if (!passed) {
                     ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
                               static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
