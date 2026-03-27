@@ -51,10 +51,10 @@ void Motors_s::Pos_target_cb(const boost::shared_ptr<const uam_message::arm_angl
     real_cmd_msg.hand_angle = left_hand.pos_angle_s;
     pos_real_pub.publish(real_cmd_msg);
 
-    ROS_INFO_THROTTLE(1.0,
-                      "motors_simulation bridge: guidefly=(%.2f, %.2f, %.2f) -> real_d=(%.2f, %.2f, %.2f)",
-                      msg->arm1_angle, msg->arm2_angle, msg->hand_angle,
-                      real_cmd_msg.arm1_angle, real_cmd_msg.arm2_angle, real_cmd_msg.hand_angle);
+    // ROS_INFO_THROTTLE(1.0,
+    //                   "motors_simulation bridge: guidefly=(%.2f, %.2f, %.2f) -> real_d=(%.2f, %.2f, %.2f)",
+    //                   msg->arm1_angle, msg->arm2_angle, msg->hand_angle,
+    //                   real_cmd_msg.arm1_angle, real_cmd_msg.arm2_angle, real_cmd_msg.hand_angle);
 
     arm1.Pos_gazebo_pub();
     arm2.Pos_gazebo_pub();
