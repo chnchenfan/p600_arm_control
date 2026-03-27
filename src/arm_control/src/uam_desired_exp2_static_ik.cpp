@@ -1,7 +1,10 @@
 #include <ros/ros.h>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
+#include <vector>
 
 #include <geometry_msgs/PoseStamped.h>
 
@@ -32,6 +35,42 @@ struct ArmState {
     double hand_deg = 0.0;
 };
 
+struct StaticValidationCase {
+    std::string name;
+    double arm1_deg;
+    double arm2_deg;
+};
+
+struct DisturbanceStep {
+    std::string name;
+    Vec3 translation_world{0.0, 0.0, 0.0};
+    double yaw_deg = 0.0;
+    double duration_sec = 0.0;
+    bool is_zero_reset = false;
+};
+
+struct ControlResult {
+    bool inputs_ready = false;
+    bool solved = false;
+    double reach_error = -1.0;
+    double radius = -1.0;
+    double radius_minus_l2 = 0.0;
+    double hold_error_world = std::numeric_limits<double>::infinity();
+    Vec3 target_body{0.0, 0.0, 0.0};
+    double solved_arm1_deg = 0.0;
+    double solved_arm2_deg = 0.0;
+};
+
+struct RunMetrics {
+    double max_reach_error = 0.0;
+    double max_hold_error = 0.0;
+    double final_hold_error = std::numeric_limits<double>::infinity();
+    double final_radius = -1.0;
+    double final_radius_minus_l2 = 0.0;
+    int ik_fail_events = 0;
+    int pose_loss_events = 0;
+};
+
 PoseState g_base_pose;
 PoseState g_ee_pose;
 ArmState g_real_arm_state;
@@ -46,13 +85,6 @@ double Clamp(double value, double min_value, double max_value) {
 
 double DegToRad(double value_deg) { return value_deg * Pi() / 180.0; }
 double RadToDeg(double value_rad) { return value_rad * 180.0 / Pi(); }
-
-double WrapToPi(double angle_rad) {
-    const double two_pi = 2.0 * Pi();
-    while (angle_rad > Pi()) angle_rad -= two_pi;
-    while (angle_rad < -Pi()) angle_rad += two_pi;
-    return angle_rad;
-}
 
 double AdjustNearReference(double angle_rad, double reference_rad) {
     double adjusted = angle_rad;
@@ -147,6 +179,35 @@ bool IsPoseFresh(const PoseState &pose, const ros::Time &now, double timeout_sec
     return (now - pose.stamp).toSec() <= timeout_sec;
 }
 
+void QuaternionMultiply(double ax, double ay, double az, double aw,
+                        double bx, double by, double bz, double bw,
+                        double *qx, double *qy, double *qz, double *qw) {
+    *qx = aw * bx + ax * bw + ay * bz - az * by;
+    *qy = aw * by - ax * bz + ay * bw + az * bx;
+    *qz = aw * bz + ax * by - ay * bx + az * bw;
+    *qw = aw * bw - ax * bx - ay * by - az * bz;
+}
+
+PoseState ApplyVirtualBaseDisturbance(const PoseState &measured_pose, const Vec3 &translation_world, double yaw_deg) {
+    PoseState disturbed = measured_pose;
+    disturbed.position = AddVec3(measured_pose.position, translation_world);
+    if (std::fabs(yaw_deg) > 1e-9) {
+        const double half_yaw = 0.5 * DegToRad(yaw_deg);
+        const double yaw_qz = std::sin(half_yaw);
+        const double yaw_qw = std::cos(half_yaw);
+        double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
+        QuaternionMultiply(0.0, 0.0, yaw_qz, yaw_qw,
+                           measured_pose.qx, measured_pose.qy, measured_pose.qz, measured_pose.qw,
+                           &qx, &qy, &qz, &qw);
+        NormalizeQuaternion(&qx, &qy, &qz, &qw);
+        disturbed.qx = qx;
+        disturbed.qy = qy;
+        disturbed.qz = qz;
+        disturbed.qw = qw;
+    }
+    return disturbed;
+}
+
 bool SolveInverseKinematics(const Vec3 &target_body,
                             double link_length,
                             double previous_arm1_deg,
@@ -206,6 +267,98 @@ void ArmRealCb(const uam_message::arm_angle::ConstPtr &msg) {
     g_real_arm_state.hand_deg = msg->hand_angle;
 }
 
+std::vector<StaticValidationCase> DefaultStaticCases() {
+    return {
+        {"center_0_0", 0.0, 0.0},
+        {"right_30_0", 30.0, 0.0},
+        {"left_-30_0", -30.0, 0.0},
+        {"up_0_10", 0.0, 10.0},
+        {"down_0_-10", 0.0, -10.0},
+    };
+}
+
+std::vector<DisturbanceStep> DefaultDisturbanceSteps() {
+    return {
+        {"baseline_zero", {0.0, 0.0, 0.0}, 0.0, 2.0, false},
+        {"x_pos", {0.02, 0.0, 0.0}, 0.0, 3.0, false},
+        {"zero_reset_1", {0.0, 0.0, 0.0}, 0.0, 2.0, true},
+        {"x_neg", {-0.02, 0.0, 0.0}, 0.0, 3.0, false},
+        {"zero_reset_2", {0.0, 0.0, 0.0}, 0.0, 2.0, true},
+        {"y_pos", {0.0, 0.02, 0.0}, 0.0, 3.0, false},
+        {"zero_reset_3", {0.0, 0.0, 0.0}, 0.0, 2.0, true},
+        {"y_neg", {0.0, -0.02, 0.0}, 0.0, 3.0, false},
+        {"zero_reset_4", {0.0, 0.0, 0.0}, 0.0, 2.0, true},
+        {"z_pos", {0.0, 0.0, 0.015}, 0.0, 3.0, false},
+        {"zero_reset_5", {0.0, 0.0, 0.0}, 0.0, 2.0, true},
+        {"z_neg", {0.0, 0.0, -0.015}, 0.0, 3.0, false},
+        {"zero_reset_6", {0.0, 0.0, 0.0}, 0.0, 2.0, true},
+        {"yaw_pos", {0.0, 0.0, 0.0}, 8.0, 3.0, false},
+        {"zero_reset_7", {0.0, 0.0, 0.0}, 0.0, 2.0, true},
+        {"yaw_neg", {0.0, 0.0, 0.0}, -8.0, 3.0, false},
+        {"zero_reset_8", {0.0, 0.0, 0.0}, 0.0, 2.0, true},
+    };
+}
+
+ControlResult ComputeControl(const PoseState &measured_base_pose,
+                             const PoseState &measured_ee_pose,
+                             const PoseState &control_base_pose,
+                             bool base_fresh,
+                             bool ee_fresh,
+                             bool arm_fresh,
+                             const Vec3 &ee_hold_world,
+                             const Vec3 &arm_base_offset_body_m,
+                             double l1_m,
+                             double l2_m,
+                             double ee_outer_kp,
+                             double ee_outer_clip_m,
+                             double arm1_zero_offset_deg,
+                             double arm2_zero_offset_deg,
+                             double arm1_min,
+                             double arm1_max,
+                             double arm2_min,
+                             double arm2_max,
+                             double eps_r_m,
+                             double eps_xy_m,
+                             double previous_arm1_deg,
+                             double previous_arm2_deg) {
+    ControlResult result;
+    result.hold_error_world = NormVec3(SubVec3(ee_hold_world, measured_ee_pose.position));
+    if (!base_fresh || !ee_fresh || !arm_fresh) {
+        return result;
+    }
+    result.inputs_ready = true;
+    const Vec3 base_world_position = GetCorrectedBaseWorldPosition(control_base_pose, arm_base_offset_body_m);
+    const Vec3 hold_offset_world = SubVec3(ee_hold_world, base_world_position);
+    const Vec3 p_hold_body = RotateWorldToBody(hold_offset_world, control_base_pose);
+    const Vec3 p_rel = SubVec3(p_hold_body, Vec3{0.0, 0.0, -l1_m});
+    const Vec3 ee_error_world = SubVec3(ee_hold_world, measured_ee_pose.position);
+    const Vec3 correction_world = ClampVec3Norm(ScaleVec3(ee_error_world, ee_outer_kp), ee_outer_clip_m);
+    const Vec3 correction_body = RotateWorldToBody(correction_world, control_base_pose);
+    result.target_body = AddVec3(p_rel, correction_body);
+    result.radius = NormVec3(result.target_body);
+    result.radius_minus_l2 = result.radius - l2_m;
+    double solved_arm1_deg = previous_arm1_deg;
+    double solved_arm2_deg = previous_arm2_deg;
+    result.solved = SolveInverseKinematics(result.target_body,
+                                           l2_m,
+                                           previous_arm1_deg,
+                                           previous_arm2_deg,
+                                           arm1_zero_offset_deg,
+                                           arm2_zero_offset_deg,
+                                           arm1_min,
+                                           arm1_max,
+                                           arm2_min,
+                                           arm2_max,
+                                           eps_r_m,
+                                           eps_xy_m,
+                                           &solved_arm1_deg,
+                                           &solved_arm2_deg,
+                                           &result.reach_error);
+    result.solved_arm1_deg = solved_arm1_deg;
+    result.solved_arm2_deg = solved_arm2_deg;
+    return result;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -218,8 +371,14 @@ int main(int argc, char *argv[]) {
     ros::Subscriber ee_pose_sub = nh.subscribe<geometry_msgs::PoseStamped>("/vrpn_client_node/arm_target/pose", 10, EePoseCb);
     ros::Subscriber arm_real_sub = nh.subscribe<uam_message::arm_angle>("/wjl/arm/real/angle_r", 10, ArmRealCb);
 
+    std::string test_mode = "single_static";
     double settle_time = 3.0;
     double test_duration_sec = 20.0;
+    double static_case_duration_sec = 10.0;
+    double preposition_timeout_sec = 20.0;
+    double preposition_tolerance_deg = 1.0;
+    double preposition_confirm_sec = 0.5;
+    double hold_error_pass_m = 0.01;
     double l1_m = 0.161;
     double l2_m = 0.262;
     double ee_outer_kp = 0.25;
@@ -244,8 +403,14 @@ int main(int argc, char *argv[]) {
     std::string base_pose_topic = "/vrpn_client_node/arm_base/pose";
     std::string ee_pose_topic = "/vrpn_client_node/arm_target/pose";
 
+    pnh.param("test_mode", test_mode, test_mode);
     pnh.param("settle_time", settle_time, settle_time);
     pnh.param("test_duration_sec", test_duration_sec, test_duration_sec);
+    pnh.param("static_case_duration_sec", static_case_duration_sec, static_case_duration_sec);
+    pnh.param("preposition_timeout_sec", preposition_timeout_sec, preposition_timeout_sec);
+    pnh.param("preposition_tolerance_deg", preposition_tolerance_deg, preposition_tolerance_deg);
+    pnh.param("preposition_confirm_sec", preposition_confirm_sec, preposition_confirm_sec);
+    pnh.param("hold_error_pass_m", hold_error_pass_m, hold_error_pass_m);
     pnh.param("L1_m", l1_m, l1_m);
     pnh.param("L2_m", l2_m, l2_m);
     pnh.param("ee_outer_kp", ee_outer_kp, ee_outer_kp);
@@ -278,163 +443,433 @@ int main(int argc, char *argv[]) {
     nh.param("/arm/left_hand_joint/min", hand_min, hand_min);
     nh.param("/arm/left_hand_joint/max", hand_max, hand_max);
 
-    // 覆盖订阅以支持 launch 改 topic。
     base_pose_sub.shutdown();
     ee_pose_sub.shutdown();
     base_pose_sub = nh.subscribe<geometry_msgs::PoseStamped>(base_pose_topic, 10, BasePoseCb);
     ee_pose_sub = nh.subscribe<geometry_msgs::PoseStamped>(ee_pose_topic, 10, EePoseCb);
 
-    ROS_INFO("exp2 static IK test ready: base_topic=%s, ee_topic=%s, L1=%.3f, L2=%.3f, base_offset=[%.3f, %.3f, %.3f], settle=%.2f, test=%.2f",
-             base_pose_topic.c_str(), ee_pose_topic.c_str(), l1_m, l2_m,
+    const bool validation_suite = (test_mode == "validation_suite");
+    if (!validation_suite && test_mode != "single_static") {
+        ROS_WARN("unknown test_mode=%s, fallback to single_static", test_mode.c_str());
+        test_mode = "single_static";
+    }
+
+    ROS_INFO("exp2 static IK test ready: mode=%s, base_topic=%s, ee_topic=%s, L1=%.3f, L2=%.3f, base_offset=[%.3f, %.3f, %.3f], settle=%.2f, test=%.2f",
+             test_mode.c_str(), base_pose_topic.c_str(), ee_pose_topic.c_str(), l1_m, l2_m,
              arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m, settle_time, test_duration_sec);
 
     uam_message::arm_angle current_angle;
     current_angle.arm1_angle = 0.0;
     current_angle.arm2_angle = 0.0;
     current_angle.hand_angle = 0.0;
+    double last_valid_arm1_deg = 0.0;
+    double last_valid_arm2_deg = 0.0;
+    const Vec3 arm_base_offset_body_m{arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m};
+    ros::Time start_time = ros::Time::now();
+    ros::Time last_log_time = start_time - ros::Duration(1.0);
+
+    // single_static: 保留原有单次静态 IK 行为。
     bool hold_initialized = false;
     Vec3 ee_hold_world{explicit_hold_x, explicit_hold_y, explicit_hold_z};
     Vec3 hold_accumulator{0.0, 0.0, 0.0};
     int hold_sample_count = 0;
     int ik_fail_count = 0;
     int pose_loss_count = 0;
-    double last_valid_arm1_deg = 0.0;
-    double last_valid_arm2_deg = 0.0;
-    const Vec3 arm_base_offset_body_m{arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m};
     bool test_started = false;
-    ros::Time start_time = ros::Time::now();
     ros::Time test_start;
-    ros::Time last_log_time = start_time - ros::Duration(1.0);
+
+    // validation_suite: 新增自动验证套件。
+    const std::vector<StaticValidationCase> static_cases = DefaultStaticCases();
+    const std::vector<DisturbanceStep> disturbance_steps = DefaultDisturbanceSteps();
+    enum class SuitePhase {
+        kPrepositionStatic,
+        kFreezeStaticHold,
+        kRunStatic,
+        kPrepositionVirtual,
+        kFreezeVirtualHold,
+        kRunVirtual,
+        kDone,
+    };
+    SuitePhase suite_phase = SuitePhase::kPrepositionStatic;
+    std::size_t active_case_index = 0;
+    std::size_t static_cases_passed = 0;
+    std::size_t active_step_index = 0;
+    bool virtual_disturbance_passed = false;
+    ros::Time phase_start = start_time;
+    ros::Time in_tolerance_since;
+    bool in_tolerance = false;
+    RunMetrics metrics;
+
+    auto ResetHoldCapture = [&]() {
+        hold_initialized = false;
+        hold_accumulator = {0.0, 0.0, 0.0};
+        hold_sample_count = 0;
+        ee_hold_world = {explicit_hold_x, explicit_hold_y, explicit_hold_z};
+    };
+
+    auto ResetMetrics = [&]() {
+        metrics = RunMetrics();
+        ik_fail_count = 0;
+        pose_loss_count = 0;
+    };
+
+    auto PublishCurrent = [&]() {
+        joint_angle_pub.publish(current_angle);
+    };
+
+    auto UpdateMeasuredArmState = [&]() {
+        if (g_real_arm_state.valid) {
+            current_angle.hand_angle = Clamp(g_real_arm_state.hand_deg, hand_min, hand_max);
+            last_valid_arm1_deg = Clamp(g_real_arm_state.arm1_deg, arm1_min, arm1_max);
+            last_valid_arm2_deg = Clamp(g_real_arm_state.arm2_deg, arm2_min, arm2_max);
+            if (!test_started && !validation_suite) {
+                current_angle.arm1_angle = last_valid_arm1_deg;
+                current_angle.arm2_angle = last_valid_arm2_deg;
+            }
+        }
+    };
+
+    auto HoldCaptureTick = [&](const ros::Time &now, const std::string &tag) -> bool {
+        const bool ee_fresh = IsPoseFresh(g_ee_pose, now, pose_timeout_sec);
+        if (!ee_fresh) {
+            ROS_WARN_THROTTLE(1.0, "%s waiting for fresh ee pose before freezing hold", tag.c_str());
+            return false;
+        }
+        hold_accumulator = AddVec3(hold_accumulator, g_ee_pose.position);
+        ++hold_sample_count;
+        if (hold_sample_count >= static_cast<int>(hold_freeze_samples)) {
+            ee_hold_world = ScaleVec3(hold_accumulator, 1.0 / static_cast<double>(hold_sample_count));
+            hold_initialized = true;
+            ROS_INFO("%s hold point frozen from arm_target: (%.3f, %.3f, %.3f)", tag.c_str(), ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);
+            return true;
+        }
+        return false;
+    };
+
+    auto UpdateRunMetrics = [&](const ControlResult &result, bool base_fresh, bool ee_fresh) {
+        metrics.final_hold_error = result.hold_error_world;
+        if (std::isfinite(result.hold_error_world)) {
+            metrics.max_hold_error = std::max(metrics.max_hold_error, result.hold_error_world);
+        }
+        metrics.final_radius = result.radius;
+        metrics.final_radius_minus_l2 = result.radius_minus_l2;
+        if (!result.inputs_ready) {
+            ++pose_loss_count;
+            ++metrics.pose_loss_events;
+            ROS_WARN_THROTTLE(1.0, "exp2 validation waiting for fresh data, base_fresh=%s, ee_fresh=%s, arm_fresh=%s (%d/%d)",
+                              base_fresh ? "true" : "false",
+                              ee_fresh ? "true" : "false",
+                              g_real_arm_state.valid ? "true" : "false",
+                              pose_loss_count, pose_loss_limit);
+            return;
+        }
+        pose_loss_count = 0;
+        if (!result.solved) {
+            ++ik_fail_count;
+            ++metrics.ik_fail_events;
+            ROS_WARN_THROTTLE(1.0, "exp2 validation IK failed (%d/%d), target=(%.3f, %.3f, %.3f), radius=%.4f, L2=%.4f, radius_minus_l2=%.4f, reach_error=%.4f",
+                              ik_fail_count, ik_fail_limit,
+                              result.target_body.x, result.target_body.y, result.target_body.z,
+                              result.radius, l2_m, result.radius_minus_l2, result.reach_error);
+            return;
+        }
+        ik_fail_count = 0;
+        metrics.max_reach_error = std::max(metrics.max_reach_error, result.reach_error);
+        const double dt = 1.0 / 30.0;
+        const double solved_arm1_deg = RateLimit(result.solved_arm1_deg, last_valid_arm1_deg, arm1_dot_max_deg_s * dt);
+        const double solved_arm2_deg = RateLimit(result.solved_arm2_deg, last_valid_arm2_deg, arm2_dot_max_deg_s * dt);
+        current_angle.arm1_angle = Clamp(solved_arm1_deg, arm1_min, arm1_max);
+        current_angle.arm2_angle = Clamp(solved_arm2_deg, arm2_min, arm2_max);
+        last_valid_arm1_deg = current_angle.arm1_angle;
+        last_valid_arm2_deg = current_angle.arm2_angle;
+    };
 
     ros::Rate rate(30.0);
     while (ros::ok()) {
         ros::spinOnce();
         const ros::Time now = ros::Time::now();
-
-        if (g_real_arm_state.valid) {
-            current_angle.hand_angle = Clamp(g_real_arm_state.hand_deg, hand_min, hand_max);
-            last_valid_arm1_deg = Clamp(g_real_arm_state.arm1_deg, arm1_min, arm1_max);
-            last_valid_arm2_deg = Clamp(g_real_arm_state.arm2_deg, arm2_min, arm2_max);
-            if (!test_started) {
-                current_angle.arm1_angle = last_valid_arm1_deg;
-                current_angle.arm2_angle = last_valid_arm2_deg;
-            }
-        }
-
+        UpdateMeasuredArmState();
         const bool base_fresh = IsPoseFresh(g_base_pose, now, pose_timeout_sec);
         const bool ee_fresh = IsPoseFresh(g_ee_pose, now, pose_timeout_sec);
 
-        if (!hold_initialized) {
-            if (use_initial_ee_hold) {
-                if (ee_fresh) {
-                    hold_accumulator = AddVec3(hold_accumulator, g_ee_pose.position);
-                    ++hold_sample_count;
-                    if (hold_sample_count >= static_cast<int>(hold_freeze_samples)) {
-                        ee_hold_world = ScaleVec3(hold_accumulator, 1.0 / static_cast<double>(hold_sample_count));
-                        hold_initialized = true;
-                        ROS_INFO("exp2 static IK hold point frozen from arm_target: (%.3f, %.3f, %.3f)", ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);
+        if (!validation_suite) {
+            if (!hold_initialized) {
+                if (use_initial_ee_hold) {
+                    if (ee_fresh) {
+                        hold_accumulator = AddVec3(hold_accumulator, g_ee_pose.position);
+                        ++hold_sample_count;
+                        if (hold_sample_count >= static_cast<int>(hold_freeze_samples)) {
+                            ee_hold_world = ScaleVec3(hold_accumulator, 1.0 / static_cast<double>(hold_sample_count));
+                            hold_initialized = true;
+                            ROS_INFO("exp2 static IK hold point frozen from arm_target: (%.3f, %.3f, %.3f)", ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);
+                        }
                     }
+                } else {
+                    hold_initialized = true;
+                    ROS_INFO("exp2 static IK hold point set explicitly: (%.3f, %.3f, %.3f)", ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);
+                }
+            }
+
+            if (!test_started) {
+                PublishCurrent();
+                if ((now - start_time).toSec() >= settle_time && hold_initialized && base_fresh && ee_fresh && g_real_arm_state.valid) {
+                    test_started = true;
+                    test_start = now;
+                    ROS_INFO("exp2 static IK test started");
+                } else {
+                    ROS_WARN_THROTTLE(1.0, "exp2 static IK waiting: base_fresh=%s, ee_fresh=%s, arm_fresh=%s, hold_ready=%s",
+                                      base_fresh ? "true" : "false",
+                                      ee_fresh ? "true" : "false",
+                                      g_real_arm_state.valid ? "true" : "false",
+                                      hold_initialized ? "true" : "false");
+                }
+                rate.sleep();
+                continue;
+            }
+
+            const ControlResult result = ComputeControl(g_base_pose, g_ee_pose, g_base_pose,
+                                                        base_fresh, ee_fresh, g_real_arm_state.valid,
+                                                        ee_hold_world, arm_base_offset_body_m,
+                                                        l1_m, l2_m, ee_outer_kp, ee_outer_clip_m,
+                                                        arm1_zero_offset_deg, arm2_zero_offset_deg,
+                                                        arm1_min, arm1_max, arm2_min, arm2_max,
+                                                        eps_r_m, eps_xy_m,
+                                                        last_valid_arm1_deg, last_valid_arm2_deg);
+            if (!result.inputs_ready) {
+                ++pose_loss_count;
+                ROS_WARN_THROTTLE(1.0, "exp2 static IK waiting for fresh data, base_fresh=%s, ee_fresh=%s, arm_fresh=%s (%d/%d)",
+                                  base_fresh ? "true" : "false", ee_fresh ? "true" : "false", g_real_arm_state.valid ? "true" : "false",
+                                  pose_loss_count, pose_loss_limit);
+                if (pose_loss_count >= pose_loss_limit) {
+                    ROS_ERROR("exp2 static IK lost required feedback continuously, aborting test");
+                    return 1;
                 }
             } else {
-                hold_initialized = true;
-                ROS_INFO("exp2 static IK hold point set explicitly: (%.3f, %.3f, %.3f)", ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);
+                pose_loss_count = 0;
+                if (!result.solved) {
+                    ++ik_fail_count;
+                    ROS_WARN_THROTTLE(1.0, "exp2 static IK failed (%d/%d), target=(%.3f, %.3f, %.3f), radius=%.4f, L2=%.4f, radius_minus_l2=%.4f, reach_error=%.4f",
+                                      ik_fail_count, ik_fail_limit,
+                                      result.target_body.x, result.target_body.y, result.target_body.z,
+                                      result.radius, l2_m, result.radius_minus_l2, result.reach_error);
+                    if (ik_fail_count >= ik_fail_limit) {
+                        ROS_ERROR("exp2 static IK failed continuously, aborting test");
+                        return 1;
+                    }
+                } else {
+                    ik_fail_count = 0;
+                    const double dt = 1.0 / 30.0;
+                    const double solved_arm1_deg = RateLimit(result.solved_arm1_deg, last_valid_arm1_deg, arm1_dot_max_deg_s * dt);
+                    const double solved_arm2_deg = RateLimit(result.solved_arm2_deg, last_valid_arm2_deg, arm2_dot_max_deg_s * dt);
+                    current_angle.arm1_angle = Clamp(solved_arm1_deg, arm1_min, arm1_max);
+                    current_angle.arm2_angle = Clamp(solved_arm2_deg, arm2_min, arm2_max);
+                    last_valid_arm1_deg = current_angle.arm1_angle;
+                    last_valid_arm2_deg = current_angle.arm2_angle;
+                }
             }
-        }
-
-        if (!test_started) {
-            joint_angle_pub.publish(current_angle);
-            if ((now - start_time).toSec() >= settle_time && hold_initialized && base_fresh && ee_fresh && g_real_arm_state.valid) {
-                test_started = true;
-                test_start = now;
-                ROS_INFO("exp2 static IK test started");
-            } else {
-                ROS_WARN_THROTTLE(1.0, "exp2 static IK waiting: base_fresh=%s, ee_fresh=%s, arm_fresh=%s, hold_ready=%s",
-                                  base_fresh ? "true" : "false",
-                                  ee_fresh ? "true" : "false",
-                                  g_real_arm_state.valid ? "true" : "false",
-                                  hold_initialized ? "true" : "false");
+            PublishCurrent();
+            if ((now - last_log_time).toSec() >= 1.0) {
+                last_log_time = now;
+                ROS_INFO("[exp2_static_ik] t=%.2f s, arm_d=(%.2f, %.2f, %.2f), base_fresh=%s, ee_fresh=%s, radius=%.4f, L2=%.4f, radius_minus_l2=%.4f, reach_error=%.4f, pose_loss=%d, ik_fail=%d, hold=(%.3f, %.3f, %.3f)",
+                         (now - test_start).toSec(), current_angle.arm1_angle, current_angle.arm2_angle, current_angle.hand_angle,
+                         base_fresh ? "true" : "false", ee_fresh ? "true" : "false",
+                         result.radius, l2_m, result.radius_minus_l2, result.reach_error, pose_loss_count, ik_fail_count,
+                         ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);
+            }
+            if ((now - test_start).toSec() >= test_duration_sec) {
+                ROS_INFO("exp2 static IK test finished successfully after %.2f s", test_duration_sec);
+                return 0;
             }
             rate.sleep();
             continue;
         }
 
-        double reach_error = -1.0;
-        double p_rel_radius = -1.0;
-        double radius_minus_l2 = 0.0;
-        if (!base_fresh || !ee_fresh || !g_real_arm_state.valid) {
-            ++pose_loss_count;
-            ROS_WARN_THROTTLE(1.0, "exp2 static IK waiting for fresh data, base_fresh=%s, ee_fresh=%s, arm_fresh=%s (%d/%d)",
-                              base_fresh ? "true" : "false", ee_fresh ? "true" : "false", g_real_arm_state.valid ? "true" : "false",
-                              pose_loss_count, pose_loss_limit);
-            if (pose_loss_count >= pose_loss_limit) {
-                ROS_ERROR("exp2 static IK lost required feedback continuously, aborting test");
-                return 1;
-            }
-        } else {
-            pose_loss_count = 0;
-            const Vec3 base_world_position = GetCorrectedBaseWorldPosition(g_base_pose, arm_base_offset_body_m);
-            const Vec3 hold_offset_world = SubVec3(ee_hold_world, base_world_position);
-            const Vec3 p_hold_body = RotateWorldToBody(hold_offset_world, g_base_pose);
-            const Vec3 p_rel = SubVec3(p_hold_body, Vec3{0.0, 0.0, -l1_m});
-            const Vec3 ee_error_world = SubVec3(ee_hold_world, g_ee_pose.position);
-            const Vec3 correction_world = ClampVec3Norm(ScaleVec3(ee_error_world, ee_outer_kp), ee_outer_clip_m);
-            const Vec3 correction_body = RotateWorldToBody(correction_world, g_base_pose);
-            const Vec3 p_rel_corrected = AddVec3(p_rel, correction_body);
-            p_rel_radius = NormVec3(p_rel_corrected);
-            radius_minus_l2 = p_rel_radius - l2_m;
+        // validation_suite mode
+        const StaticValidationCase current_case = (active_case_index < static_cases.size()) ? static_cases[active_case_index] : StaticValidationCase{"center_0_0", 0.0, 0.0};
+        const bool preposition_virtual = (suite_phase == SuitePhase::kPrepositionVirtual || suite_phase == SuitePhase::kFreezeVirtualHold || suite_phase == SuitePhase::kRunVirtual);
+        const double target_preposition_arm1 = preposition_virtual ? 0.0 : current_case.arm1_deg;
+        const double target_preposition_arm2 = preposition_virtual ? 0.0 : current_case.arm2_deg;
 
-            double solved_arm1_deg = last_valid_arm1_deg;
-            double solved_arm2_deg = last_valid_arm2_deg;
-            const bool solved = SolveInverseKinematics(p_rel_corrected,
-                                                       l2_m,
-                                                       last_valid_arm1_deg,
-                                                       last_valid_arm2_deg,
-                                                       arm1_zero_offset_deg,
-                                                       arm2_zero_offset_deg,
-                                                       arm1_min,
-                                                       arm1_max,
-                                                       arm2_min,
-                                                       arm2_max,
-                                                       eps_r_m,
-                                                       eps_xy_m,
-                                                       &solved_arm1_deg,
-                                                       &solved_arm2_deg,
-                                                       &reach_error);
-            if (!solved) {
-                ++ik_fail_count;
-                ROS_WARN_THROTTLE(1.0, "exp2 static IK failed (%d/%d), target=(%.3f, %.3f, %.3f), radius=%.4f, L2=%.4f, radius_minus_l2=%.4f, reach_error=%.4f",
-                                  ik_fail_count, ik_fail_limit,
-                                  p_rel_corrected.x, p_rel_corrected.y, p_rel_corrected.z,
-                                  p_rel_radius, l2_m, radius_minus_l2, reach_error);
-                if (ik_fail_count >= ik_fail_limit) {
-                    ROS_ERROR("exp2 static IK failed continuously, aborting test");
-                    return 1;
+        if (suite_phase == SuitePhase::kPrepositionStatic || suite_phase == SuitePhase::kPrepositionVirtual) {
+            current_angle.arm1_angle = target_preposition_arm1;
+            current_angle.arm2_angle = target_preposition_arm2;
+            PublishCurrent();
+
+            if (!g_real_arm_state.valid) {
+                ROS_WARN_THROTTLE(1.0, "exp2 validation preposition waiting for /wjl/arm/real/angle_r");
+                rate.sleep();
+                continue;
+            }
+
+            const double arm1_error = target_preposition_arm1 - g_real_arm_state.arm1_deg;
+            const double arm2_error = target_preposition_arm2 - g_real_arm_state.arm2_deg;
+            const bool in_band = std::fabs(arm1_error) <= preposition_tolerance_deg && std::fabs(arm2_error) <= preposition_tolerance_deg;
+            if (in_band) {
+                if (!in_tolerance) {
+                    in_tolerance = true;
+                    in_tolerance_since = now;
+                }
+                if ((now - in_tolerance_since).toSec() >= preposition_confirm_sec) {
+                    ResetHoldCapture();
+                    ResetMetrics();
+                    in_tolerance = false;
+                    suite_phase = (suite_phase == SuitePhase::kPrepositionStatic) ? SuitePhase::kFreezeStaticHold : SuitePhase::kFreezeVirtualHold;
+                    phase_start = now;
+                    ROS_INFO("exp2 validation preposition reached: target=(%.1f, %.1f), real=(%.2f, %.2f)",
+                             target_preposition_arm1, target_preposition_arm2,
+                             g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg);
                 }
             } else {
-                ik_fail_count = 0;
-                const double dt = 1.0 / 30.0;
-                solved_arm1_deg = RateLimit(solved_arm1_deg, last_valid_arm1_deg, arm1_dot_max_deg_s * dt);
-                solved_arm2_deg = RateLimit(solved_arm2_deg, last_valid_arm2_deg, arm2_dot_max_deg_s * dt);
-                current_angle.arm1_angle = Clamp(solved_arm1_deg, arm1_min, arm1_max);
-                current_angle.arm2_angle = Clamp(solved_arm2_deg, arm2_min, arm2_max);
-                last_valid_arm1_deg = current_angle.arm1_angle;
-                last_valid_arm2_deg = current_angle.arm2_angle;
+                in_tolerance = false;
             }
+
+            if ((now - phase_start).toSec() > preposition_timeout_sec) {
+                ROS_ERROR("exp2 validation preposition timeout: target=(%.1f, %.1f), real=(%.2f, %.2f)",
+                          target_preposition_arm1, target_preposition_arm2,
+                          g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg);
+                ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
+                          static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+                return 1;
+            }
+            rate.sleep();
+            continue;
         }
 
-        joint_angle_pub.publish(current_angle);
-
-        if ((now - last_log_time).toSec() >= 1.0) {
-            last_log_time = now;
-            ROS_INFO("[exp2_static_ik] t=%.2f s, arm_d=(%.2f, %.2f, %.2f), base_fresh=%s, ee_fresh=%s, radius=%.4f, L2=%.4f, radius_minus_l2=%.4f, reach_error=%.4f, pose_loss=%d, ik_fail=%d, hold=(%.3f, %.3f, %.3f)",
-                     (now - test_start).toSec(), current_angle.arm1_angle, current_angle.arm2_angle, current_angle.hand_angle,
-                     base_fresh ? "true" : "false", ee_fresh ? "true" : "false",
-                     p_rel_radius, l2_m, radius_minus_l2, reach_error, pose_loss_count, ik_fail_count,
-                     ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);
+        if (suite_phase == SuitePhase::kFreezeStaticHold || suite_phase == SuitePhase::kFreezeVirtualHold) {
+            current_angle.arm1_angle = target_preposition_arm1;
+            current_angle.arm2_angle = target_preposition_arm2;
+            PublishCurrent();
+            if (HoldCaptureTick(now, preposition_virtual ? "exp2 validation virtual" : "exp2 validation static")) {
+                phase_start = now;
+                ResetMetrics();
+                suite_phase = (suite_phase == SuitePhase::kFreezeStaticHold) ? SuitePhase::kRunStatic : SuitePhase::kRunVirtual;
+                active_step_index = 0;
+                if (suite_phase == SuitePhase::kRunStatic) {
+                    ROS_INFO("exp2 validation static case %zu/%zu started: name=%s, initial_pose=(%.1f, %.1f)",
+                             active_case_index + 1, static_cases.size(), current_case.name.c_str(), current_case.arm1_deg, current_case.arm2_deg);
+                } else {
+                    ROS_INFO("exp2 validation virtual disturbance started at center pose");
+                }
+            }
+            rate.sleep();
+            continue;
         }
 
-        if ((now - test_start).toSec() >= test_duration_sec) {
-            ROS_INFO("exp2 static IK test finished successfully after %.2f s", test_duration_sec);
+        if (suite_phase == SuitePhase::kRunStatic) {
+            const ControlResult result = ComputeControl(g_base_pose, g_ee_pose, g_base_pose,
+                                                        base_fresh, ee_fresh, g_real_arm_state.valid,
+                                                        ee_hold_world, arm_base_offset_body_m,
+                                                        l1_m, l2_m, ee_outer_kp, ee_outer_clip_m,
+                                                        arm1_zero_offset_deg, arm2_zero_offset_deg,
+                                                        arm1_min, arm1_max, arm2_min, arm2_max,
+                                                        eps_r_m, eps_xy_m,
+                                                        last_valid_arm1_deg, last_valid_arm2_deg);
+            UpdateRunMetrics(result, base_fresh, ee_fresh);
+            PublishCurrent();
+
+            if ((now - last_log_time).toSec() >= 1.0) {
+                last_log_time = now;
+                ROS_INFO("[exp2_validation_static] case=%s t=%.2f s, arm_d=(%.2f, %.2f, %.2f), hold_error=%.4f, reach_error=%.4f, ik_fail=%d, pose_loss=%d",
+                         current_case.name.c_str(), (now - phase_start).toSec(), current_angle.arm1_angle, current_angle.arm2_angle, current_angle.hand_angle,
+                         metrics.final_hold_error, result.reach_error, metrics.ik_fail_events, metrics.pose_loss_events);
+            }
+
+            if (metrics.ik_fail_events >= ik_fail_limit || metrics.pose_loss_events >= pose_loss_limit) {
+                ROS_ERROR("exp2 validation static case aborted: case_index=%zu, initial_pose=(%.1f, %.1f), reach_error_max=%.4f, hold_error_final_m=%.4f, hold_error_max_m=%.4f, ik_fail_count=%d, pose_loss_count=%d, pass=false",
+                          active_case_index + 1, current_case.arm1_deg, current_case.arm2_deg,
+                          metrics.max_reach_error, metrics.final_hold_error, metrics.max_hold_error,
+                          metrics.ik_fail_events, metrics.pose_loss_events);
+                ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
+                          static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+                return 1;
+            }
+
+            if ((now - phase_start).toSec() >= static_case_duration_sec) {
+                const bool passed = metrics.ik_fail_events == 0 && metrics.pose_loss_events == 0 &&
+                                    metrics.max_reach_error <= eps_r_m && metrics.final_hold_error <= hold_error_pass_m;
+                ROS_INFO("exp2 validation static case summary: case_index=%zu, initial_pose=(%.1f, %.1f), reach_error_max=%.4f, hold_error_final_m=%.4f, hold_error_max_m=%.4f, ik_fail_count=%d, pose_loss_count=%d, pass=%s",
+                         active_case_index + 1, current_case.arm1_deg, current_case.arm2_deg,
+                         metrics.max_reach_error, metrics.final_hold_error, metrics.max_hold_error,
+                         metrics.ik_fail_events, metrics.pose_loss_events, passed ? "true" : "false");
+                if (!passed) {
+                    ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
+                              static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+                    return 1;
+                }
+                ++static_cases_passed;
+                ++active_case_index;
+                if (active_case_index < static_cases.size()) {
+                    suite_phase = SuitePhase::kPrepositionStatic;
+                } else {
+                    suite_phase = SuitePhase::kPrepositionVirtual;
+                }
+                phase_start = now;
+                in_tolerance = false;
+            }
+            rate.sleep();
+            continue;
+        }
+
+        if (suite_phase == SuitePhase::kRunVirtual) {
+            const DisturbanceStep &step = disturbance_steps[active_step_index];
+            const PoseState virtual_base_pose = ApplyVirtualBaseDisturbance(g_base_pose, step.translation_world, step.yaw_deg);
+            const ControlResult result = ComputeControl(g_base_pose, g_ee_pose, virtual_base_pose,
+                                                        base_fresh, ee_fresh, g_real_arm_state.valid,
+                                                        ee_hold_world, arm_base_offset_body_m,
+                                                        l1_m, l2_m, ee_outer_kp, ee_outer_clip_m,
+                                                        arm1_zero_offset_deg, arm2_zero_offset_deg,
+                                                        arm1_min, arm1_max, arm2_min, arm2_max,
+                                                        eps_r_m, eps_xy_m,
+                                                        last_valid_arm1_deg, last_valid_arm2_deg);
+            UpdateRunMetrics(result, base_fresh, ee_fresh);
+            PublishCurrent();
+
+            if ((now - last_log_time).toSec() >= 1.0) {
+                last_log_time = now;
+                ROS_INFO("[exp2_validation_virtual] step=%s t=%.2f s, disturbance=(%.3f, %.3f, %.3f, yaw=%.1f), hold_error=%.4f, reach_error=%.4f, ik_fail=%d, pose_loss=%d",
+                         step.name.c_str(), (now - phase_start).toSec(),
+                         step.translation_world.x, step.translation_world.y, step.translation_world.z, step.yaw_deg,
+                         metrics.final_hold_error, result.reach_error, metrics.ik_fail_events, metrics.pose_loss_events);
+            }
+
+            if (metrics.ik_fail_events >= ik_fail_limit || metrics.pose_loss_events >= pose_loss_limit) {
+                ROS_ERROR("exp2 validation virtual step aborted: step_name=%s, disturbance=(%.3f, %.3f, %.3f, yaw=%.1f), peak_hold_error_m=%.4f, final_hold_error_m=%.4f, peak_reach_error_m=%.4f, pass=false",
+                          step.name.c_str(), step.translation_world.x, step.translation_world.y, step.translation_world.z, step.yaw_deg,
+                          metrics.max_hold_error, metrics.final_hold_error, metrics.max_reach_error);
+                ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
+                          static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+                return 1;
+            }
+
+            if ((now - phase_start).toSec() >= step.duration_sec) {
+                bool passed = (metrics.ik_fail_events == 0 && metrics.pose_loss_events == 0);
+                if (step.is_zero_reset) {
+                    passed = passed && (metrics.final_hold_error <= hold_error_pass_m);
+                }
+                ROS_INFO("exp2 validation virtual step summary: step_name=%s, disturbance=(%.3f, %.3f, %.3f, yaw=%.1f), peak_hold_error_m=%.4f, final_hold_error_m=%.4f, peak_reach_error_m=%.4f, pass=%s",
+                         step.name.c_str(), step.translation_world.x, step.translation_world.y, step.translation_world.z, step.yaw_deg,
+                         metrics.max_hold_error, metrics.final_hold_error, metrics.max_reach_error, passed ? "true" : "false");
+                if (!passed) {
+                    ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
+                              static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+                    return 1;
+                }
+                ++active_step_index;
+                if (active_step_index >= disturbance_steps.size()) {
+                    virtual_disturbance_passed = true;
+                    suite_phase = SuitePhase::kDone;
+                } else {
+                    ResetMetrics();
+                    phase_start = now;
+                }
+            }
+            rate.sleep();
+            continue;
+        }
+
+        if (suite_phase == SuitePhase::kDone) {
+            ROS_INFO("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=true",
+                     static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
             return 0;
         }
 

@@ -1,11 +1,10 @@
 <?xml version="1.0"?>
 <launch>
     <!--
-        实验二静态逆解测试入口：
-        1. 无人机不发布圆弧轨迹、不走正式实验二状态机；
-        2. 只保留机械臂侧执行链：guidefly/angle_d -> real/angle_d -> serial_ -> real/angle_r；
-        3. 节点在地面冻结一个静态 P_hold，然后持续运行与实验二一致的几何补偿和 IK；
-        4. 用这个入口先验证“几何约定 + 外参 + 零偏”是否自洽，再决定是否进入正式实验二。
+        实验二自动验证套件入口：
+        1. 先做 5 组多姿态静态 IK 复测；
+        2. 静态组全部通过后，再做虚拟基座扰动测试；
+        3. 这里的虚拟扰动只用于验证补偿逻辑稳定性，不能替代真实小扰动复验。
     -->
     <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />
 
@@ -13,12 +12,17 @@
     <node pkg="arm_control" type="serial_" name="serial_" output="screen" />
 
     <node pkg="arm_control" type="uam_desired_exp2_static_ik" name="uam_desired_exp2_static_ik" output="screen">
-        <param name="test_mode" value="single_static" />
+        <param name="test_mode" value="validation_suite" />
         <param name="base_pose_topic" value="/vrpn_client_node/arm_base/pose" />
         <param name="ee_pose_topic" value="/vrpn_client_node/arm_target/pose" />
 
         <param name="settle_time" value="3.0" />
         <param name="test_duration_sec" value="20.0" />
+        <param name="static_case_duration_sec" value="10.0" />
+        <param name="preposition_timeout_sec" value="20.0" />
+        <param name="preposition_tolerance_deg" value="1.0" />
+        <param name="preposition_confirm_sec" value="0.5" />
+        <param name="hold_error_pass_m" value="0.01" />
 
         <param name="L1_m" value="0.161" />
         <param name="L2_m" value="0.229523" />

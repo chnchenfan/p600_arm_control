@@ -93,7 +93,7 @@ python3 /home/cf/Program/code/P600_uam/p600_arm_control/shell/Calibration/fit_st
 
 ### Data definition
 
-The aircraft-side collector publishes 24 fixed static arm configurations for the second-round high-precision dataset. Each valid sample window lasts 2.5 s. The default per-sample convergence timeout is 15.0 s. The collector waits for `/wjl/arm/real/angle_r` from the real arm driver before opening each sample window. The host-side fitter uses `/wjl/calibration/sample_index` to segment the bag automatically.
+The aircraft-side collector now publishes 39 fixed static arm configurations for the current high-coverage dataset. Each valid sample window lasts 2.5 s. The default per-sample convergence timeout is 15.0 s. The collector waits for `/wjl/arm/real/angle_r` from the real arm driver before opening each sample window. The host-side fitter uses `/wjl/calibration/sample_index` to segment the bag automatically.
 
 ### Output
 
@@ -116,7 +116,7 @@ Write these values back to:
 
 ### Upgrade rule
 
-If stage-1 `RMS > 8 mm`, move to stage 2. For the second-round collection, use the built-in 24-pose sequence instead of the older 12-pose set.
+If stage-1 `RMS > 8 mm`, move to stage 2. For the current collection round, use the built-in 39-pose sequence instead of the older 12/24-pose sets.
 
 ## Stage 2: add arm_target xyz
 
@@ -156,8 +156,78 @@ Recommended acceptance targets:
 - Do not release all parameters at once in the first iteration.
 - The stage-1 script in this repository implements only the stage-1 parameter set.
 
+## Multi-Static IK Validation
+
+Before the formal experiment-2 flight, run the automatic validation suite on the aircraft computer:
+
+```bash
+cd ~/p600_arm_control
+bash shell/Experiment/uam_control_desired_exp2_validation.sh
+```
+
+The suite executes five fixed static IK cases in sequence:
+
+- `(0, 0)`
+- `(30, 0)`
+- `(-30, 0)`
+- `(0, 10)`
+- `(0, -10)`
+
+For each case, the node first prepositions the arm to the requested initial pose, then freezes the current `arm_target` world position into `P_hold`, then runs static IK for 10 s.
+
+Each static case must satisfy:
+
+- no continuous `IK fail`
+- no continuous `pose loss`
+- total `ik_fail_count = 0`
+- total `pose_loss_count = 0`
+- `max(reach_error) <= eps_r_m`
+- final `hold_error_world <= 0.01 m`
+
+Only if all five static cases pass should you continue to the virtual disturbance phase.
+
+## Virtual Base Disturbance Validation
+
+After all five static cases pass, the suite automatically returns to the center pose `(0, 0)`, freezes a new `P_hold`, and runs a software-injected virtual base disturbance sequence.
+
+The disturbance sequence is a fixed step table:
+
+- `baseline_zero`
+- `x_pos`
+- `zero_reset_1`
+- `x_neg`
+- `zero_reset_2`
+- `y_pos`
+- `zero_reset_3`
+- `y_neg`
+- `zero_reset_4`
+- `z_pos`
+- `zero_reset_5`
+- `z_neg`
+- `zero_reset_6`
+- `yaw_pos`
+- `zero_reset_7`
+- `yaw_neg`
+- `zero_reset_8`
+
+Translation disturbances are defined in the world frame. Yaw disturbances are injected as an additional yaw rotation on top of the measured `arm_base` pose, but only inside the IK/control computation.
+
+This validation is intended to verify:
+
+- compensation logic stability
+- command continuity
+- ability to return close to the frozen hold point after each disturbance reset
+
+This validation is **not** equivalent to a real base-motion hold test. Even if the virtual disturbance suite passes, you still need at least one real small-disturbance retest with the UAV unpowered or otherwise safely constrained before using the formal experiment-2 flight as the next step.
+
 
 ## Update Log
+
+### 2026-03-27 17:25 CST
+- Added a validation-suite mode to the experiment-2 static IK node so one entrypoint can run either the old single-point static test or the new automatic verification flow.
+- Added five fixed multi-static IK validation cases before the disturbance phase to verify the calibrated geometry in multiple workspace regions.
+- Added a virtual base disturbance validation phase with fixed translation and yaw step disturbances to check compensation stability and return-to-hold behavior.
+- Added a dedicated launch/script entrypoint for the automatic validation suite and updated this README to state that virtual disturbance validation does not replace a real small-disturbance retest.
 
 ### 2026-03-24 20:18 CST
 - Fixed the experiment-2 arm1/body-frame sign convention: arm1 increasing now maps to end-effector motion toward -y in the arm_base body frame.
