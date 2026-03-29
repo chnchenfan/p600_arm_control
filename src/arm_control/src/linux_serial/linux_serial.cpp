@@ -1,5 +1,37 @@
 #include "linux_serial/linux_serial.h"
 #include "Servos/Server_.h"
+
+namespace {
+
+double HostSideErrorDeg(double desired_deg, double feedback_deg) {
+    return desired_deg - feedback_deg;
+}
+
+void LogDriverStateThrottle(const char *tag, const Server_ &server) {
+    // 这里额外打印驱动板返回的原始状态字段，是为了区分两类常见问题：
+    // 1. 主机端命令已经发出，但驱动板没有真正接受/执行位置控制；
+    // 2. 驱动板已经执行，但当前位置/目标位置的解析没有正确更新。
+    //
+    // 当 real_d 已经变化、feedback 仍长期不变时，只看角度日志不够，
+    // 需要连同 ready_status / motor_status / target_position / current_position 一起看，
+    // 才能判断问题是在“板子不动”还是“状态解析没跟上”。
+    ROS_INFO_THROTTLE(1.0,
+                      "%s driver state: ready=%u, motor=%u, tp_dir=%u, cp_dir=%u, target_pulse=%u, current_pulse=%u, pos_err_pulse=%u, host_target_deg=%.2f, feedback_deg=%.2f, board_err_deg=%.2f",
+                      tag,
+                      static_cast<unsigned>(server.state_pkg.ready_status),
+                      static_cast<unsigned>(server.state_pkg.motor_status),
+                      static_cast<unsigned>(server.state_pkg.direction_tp),
+                      static_cast<unsigned>(server.state_pkg.direction_cp),
+                      static_cast<unsigned>(server.state_pkg.target_position),
+                      static_cast<unsigned>(server.state_pkg.current_position),
+                      static_cast<unsigned>(server.state_pkg.position_error),
+                      server.pos_angle_s,
+                      server.pos_angle_r,
+                      server.pos_error);
+}
+
+}  // namespace
+
 Linux_serial::Linux_serial(ros::NodeHandle &nh,std::string usb_name):
 sp(iosev, usb_name),servers(nh)
 {
@@ -62,11 +94,23 @@ void Linux_serial::Send_all_data(){
     ros::Duration(command_gap_sec).sleep();
     servers.Arm_angle_pub();// 发布角度
 
+    const double arm1_host_error = HostSideErrorDeg(servers.server1.pos_angle_s, servers.server1.pos_angle_r);
+    const double arm2_host_error = HostSideErrorDeg(servers.server2.pos_angle_s, servers.server2.pos_angle_r);
+    const double hand_host_error = HostSideErrorDeg(servers.server3.pos_angle_s, servers.server3.pos_angle_r);
+
     ROS_INFO_THROTTLE(1.0,
-                      "serial loop: desired=(%.2f, %.2f, %.2f), feedback=(%.2f, %.2f, %.2f), error=(%.2f, %.2f, %.2f)",
+                      // 这里同时打印两种误差：
+                      // 1. board_err：驱动板在状态包里返回的位置误差；
+                      // 2. host_err：主机端直接用 desired-feedback 算出来的真实角度差。
+                      //
+                      // 之前遇到的现象是：desired 已经变成 -5 deg，但 feedback 仍然是 0，
+                      // 同时 board_err 也还是 0。为避免“板子上报误差为 0”误导判断，
+                      // 这里必须把 host_err 也一起打出来。
+                      "serial loop: desired=(%.2f, %.2f, %.2f), feedback=(%.2f, %.2f, %.2f), board_err=(%.2f, %.2f, %.2f), host_err=(%.2f, %.2f, %.2f)",
                       servers.server1.pos_angle_s, servers.server2.pos_angle_s, servers.server3.pos_angle_s,
                       servers.server1.pos_angle_r, servers.server2.pos_angle_r, servers.server3.pos_angle_r,
-                      servers.server1.pos_error, servers.server2.pos_error, servers.server3.pos_error);
+                      servers.server1.pos_error, servers.server2.pos_error, servers.server3.pos_error,
+                      arm1_host_error, arm2_host_error, hand_host_error);
 
 }
 
@@ -249,8 +293,9 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
             // 13. ready_status (1 byte)
             servers.server1.state_pkg.ready_status = frame[idx++];
             // 14. motor_status (1 byte)
-            servers.server1.state_pkg.motor_status = frame[idx];\
+            servers.server1.state_pkg.motor_status = frame[idx];
             servers.server1.State_show();
+            LogDriverStateThrottle("server1", servers.server1);
         }
         break;
     case 0x02:
@@ -280,8 +325,9 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
                                 (frame[idx + 2] << 8) | frame[idx + 3];
             idx += 4;
             servers.server2.state_pkg.ready_status = frame[idx++];
-            servers.server2.state_pkg.motor_status = frame[idx];\
+            servers.server2.state_pkg.motor_status = frame[idx];
             servers.server2.State_show();
+            LogDriverStateThrottle("server2", servers.server2);
         }
         break;
     case 0x03:
@@ -311,8 +357,9 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
                                 (frame[idx + 2] << 8) | frame[idx + 3];
             idx += 4;
             servers.server3.state_pkg.ready_status = frame[idx++];
-            servers.server3.state_pkg.motor_status = frame[idx];\
+            servers.server3.state_pkg.motor_status = frame[idx];
             servers.server3.State_show();
+            LogDriverStateThrottle("server3", servers.server3);
         }
         break;
     }
