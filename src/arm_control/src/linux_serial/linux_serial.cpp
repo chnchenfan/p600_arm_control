@@ -1,10 +1,33 @@
 #include "linux_serial/linux_serial.h"
 #include "Servos/Server_.h"
+#include <algorithm>
+#include <iomanip>
+#include <sstream>
+#include <vector>
 
 namespace {
 
+constexpr uint8_t kFrameTail = 0x6B;
+
 double HostSideErrorDeg(double desired_deg, double feedback_deg) {
     return desired_deg - feedback_deg;
+}
+
+bool IsValidFrameHead(uint8_t value) {
+    return value == 0x01 || value == 0x02 || value == 0x03 || value == 0x04;
+}
+
+std::size_t ExpectedFrameLength(uint8_t function_code) {
+    switch (function_code) {
+        case 0x43:
+            return 31;
+        case 0xFD:
+            return 4;
+        case 0x36:
+            return 8;
+        default:
+            return 0;
+    }
 }
 
 std::string BytesToHexPreview(const uint8_t *data, size_t len, size_t max_len = 12) {
@@ -19,6 +42,39 @@ std::string BytesToHexPreview(const uint8_t *data, size_t len, size_t max_len = 
         oss << " ...";
     }
     return oss.str();
+}
+
+std::string BytesToHexPreview(const std::vector<uint8_t> &data, size_t max_len = 12) {
+    if (data.empty()) {
+        return "(empty)";
+    }
+    return BytesToHexPreview(data.data(), data.size(), max_len);
+}
+
+const char *DriverTagFromAddr(uint8_t addr) {
+    switch (addr) {
+        case 0x01:
+            return "1号驱动器";
+        case 0x02:
+            return "2号驱动器";
+        case 0x03:
+            return "3号驱动器";
+        default:
+            return "未知驱动器";
+    }
+}
+
+Server_ *ServerByAddr(Servers_ &servers, uint8_t addr) {
+    switch (addr) {
+        case 0x01:
+            return &servers.server1;
+        case 0x02:
+            return &servers.server2;
+        case 0x03:
+            return &servers.server3;
+        default:
+            return nullptr;
+    }
 }
 
 void LogDriverStateThrottle(const char *tag, const Server_ &server) {
@@ -42,6 +98,34 @@ void LogDriverStateThrottle(const char *tag, const Server_ &server) {
                       server.pos_angle_s,
                       server.pos_angle_r,
                       server.pos_error);
+}
+
+void DecodeStateFrameToServer(Server_ &server, const std::vector<uint8_t> &frame) {
+    size_t idx = 4;
+    server.state_pkg.bus_voltage = (frame[idx] << 8) | frame[idx + 1];
+    idx += 2;
+    server.state_pkg.bus_phase_current = (frame[idx] << 8) | frame[idx + 1];
+    idx += 2;
+    server.state_pkg.encoder_value = (frame[idx] << 8) | frame[idx + 1];
+    idx += 2;
+    server.state_pkg.direction_tp = frame[idx++];
+    server.state_pkg.target_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                       (frame[idx + 2] << 8) | frame[idx + 3];
+    idx += 4;
+    server.state_pkg.direction_tv = frame[idx++];
+    server.state_pkg.target_velocity = (frame[idx] << 8) | frame[idx + 1];
+    idx += 2;
+    server.state_pkg.direction_cp = frame[idx++];
+    server.state_pkg.current_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                        (frame[idx + 2] << 8) | frame[idx + 3];
+    idx += 4;
+    server.state_pkg.direction_pe = frame[idx++];
+    server.state_pkg.position_error = (frame[idx] << 24) | (frame[idx + 1] << 16) |
+                                      (frame[idx + 2] << 8) | frame[idx + 3];
+    idx += 4;
+    server.state_pkg.ready_status = frame[idx++];
+    server.state_pkg.motor_status = frame[idx];
+    server.State_show();
 }
 
 }  // namespace
@@ -111,6 +195,10 @@ void Linux_serial::Send_all_data(){
     const double arm1_host_error = HostSideErrorDeg(servers.server1.pos_angle_s, servers.server1.pos_angle_r);
     const double arm2_host_error = HostSideErrorDeg(servers.server2.pos_angle_s, servers.server2.pos_angle_r);
     const double hand_host_error = HostSideErrorDeg(servers.server3.pos_angle_s, servers.server3.pos_angle_r);
+    const ros::Time now = ros::Time::now();
+    const bool rx_recent = !last_rx_time.isZero() && (now - last_rx_time).toSec() <= 1.0;
+    const bool state_recent = !last_state_frame_time.isZero() && (now - last_state_frame_time).toSec() <= 1.0;
+    const bool ack_recent = !last_ack_frame_time.isZero() && (now - last_ack_frame_time).toSec() <= 1.0;
 
     ROS_INFO_THROTTLE(1.0,
                       // 这里同时打印两种误差：
@@ -125,6 +213,28 @@ void Linux_serial::Send_all_data(){
                       servers.server1.pos_angle_r, servers.server2.pos_angle_r, servers.server3.pos_angle_r,
                       servers.server1.pos_error, servers.server2.pos_error, servers.server3.pos_error,
                       arm1_host_error, arm2_host_error, hand_host_error);
+
+    // 这里保留一条简短的中文健康提示，用来快速判断接收链路当前处于哪一类状态：
+    // 1. 最近完全没有任何回包；
+    // 2. 只收到了位置控制应答，没有收到完整状态帧；
+    // 3. 状态帧恢复正常，可以继续看高层几何与控制问题。
+    if (!rx_recent) {
+        ROS_WARN_THROTTLE(1.0,
+                          "串口接收健康: 最近1秒未收到任何回包, 解析错误累计=%zu",
+                          parse_error_count);
+    } else if (!state_recent && ack_recent) {
+        ROS_WARN_THROTTLE(1.0,
+                          "串口接收健康: 最近1秒只收到位置应答，未收到状态帧, 解析错误累计=%zu",
+                          parse_error_count);
+    } else if (state_recent) {
+        ROS_INFO_THROTTLE(1.0,
+                          "串口接收健康: 最近1秒状态帧正常, 解析错误累计=%zu",
+                          parse_error_count);
+    } else {
+        ROS_WARN_THROTTLE(1.0,
+                          "串口接收健康: 最近1秒收到回包，但尚未识别到状态帧或位置应答, 解析错误累计=%zu",
+                          parse_error_count);
+    }
 
 }
 
@@ -162,6 +272,7 @@ void Linux_serial::handle_read(const boost::system::error_code& error, size_t by
     {
         // 将新数据追加到缓冲区
         rx_buffer.insert(rx_buffer.end(), read_buf, read_buf + bytes_transferred);
+        last_rx_time = ros::Time::now();
 
         // 这里增加一层“原始串口数据预览”，是为了确认 RX 回包是否真的进到了程序。
         // 如果现场现象是“命令已发出，但驱动状态日志完全不出现”，那就需要先判断：
@@ -210,60 +321,78 @@ void Linux_serial::handle_read(const boost::system::error_code& error, size_t by
  * 12. 如果接收缓冲区中的数据超过1024字节，则发出警告并清空接收缓冲区。
  */
 void Linux_serial::process_rx_data() {
-    while (rx_buffer.size() >= 4) {  // 至少需要帧头+帧尾
-        // 查找可能的帧头（0x01, 0x02, 0x03, 0x04）
-        auto it = std::find_first_of(
-            rx_buffer.begin(), rx_buffer.end(),
-            std::begin({0x01, 0x02, 0x03, 0x04}),
-            std::end({0x01, 0x02, 0x03, 0x04})
-        );
+    while (!rx_buffer.empty()) {
+        auto it = std::find_if(rx_buffer.begin(), rx_buffer.end(), [](uint8_t value) {
+            return IsValidFrameHead(value);
+        });
 
         if (it == rx_buffer.end()) {
-            // 没有任何有效帧头，清空缓冲区
             const std::vector<uint8_t> preview_buffer(rx_buffer.begin(), rx_buffer.end());
             ROS_WARN_THROTTLE(1.0,
                               "串口解析: 缓冲区中没有识别到有效帧头，当前缓存长度=%zu, 预览=%s",
                               rx_buffer.size(),
-                              BytesToHexPreview(preview_buffer.data(), preview_buffer.size()).c_str());
+                              BytesToHexPreview(preview_buffer).c_str());
             rx_buffer.clear();
             return;
         }
 
-        // 移除帧头前的无效数据
-        rx_buffer.erase(rx_buffer.begin(), it);
-
-        // 检查剩余数据是否足够（至少帧头+帧尾）
-        if (rx_buffer.size() < 4) return;
-
-        // 查找帧尾 0x6B
-        auto end_it = std::find(rx_buffer.begin() + 1, rx_buffer.end(), 0x6B);
-        if (end_it == rx_buffer.end()) {
-            // 没有找到帧尾，等待更多数据
-            const size_t preview_size = std::min(rx_buffer.size(), static_cast<size_t>(8));
-            const std::vector<uint8_t> preview_buffer(rx_buffer.begin(), rx_buffer.begin() + preview_size);
+        if (it != rx_buffer.begin()) {
+            const std::vector<uint8_t> dropped(rx_buffer.begin(), it);
             ROS_WARN_THROTTLE(1.0,
-                              "串口解析: 已找到帧头但还没有帧尾，当前缓存长度=%zu, 帧头=%s",
-                              rx_buffer.size(),
-                              BytesToHexPreview(preview_buffer.data(), preview_buffer.size()).c_str());
+                              "串口解析: 丢弃帧头前的无效字节, 长度=%zu, 预览=%s",
+                              dropped.size(),
+                              BytesToHexPreview(dropped).c_str());
+            rx_buffer.erase(rx_buffer.begin(), it);
+        }
+
+        if (rx_buffer.size() < 2) {
             return;
         }
 
-        // 计算帧长度（包括帧头和帧尾）
-        size_t frame_length = std::distance(rx_buffer.begin(), end_it) + 1;
+        const uint8_t frame_head = rx_buffer[0];
+        const uint8_t function_code = rx_buffer[1];
+        const std::size_t expected_frame_length = ExpectedFrameLength(function_code);
 
-        // 提取完整帧
-        std::vector<uint8_t> frame(rx_buffer.begin(), rx_buffer.begin() + frame_length);
+        // 这里改成“按功能码定长分帧”，是因为 0x43 状态帧内部 payload 里也可能出现 0x6B。
+        // 如果还按“找到第一个 0x6B 就截帧”，31 字节状态帧就会被提前截成 14 字节等错误长度，
+        // 后面的缓冲区也会整体错位，最终造成 arm2 状态反馈长期异常。
+        if (expected_frame_length == 0) {
+            ++parse_error_count;
+            ROS_WARN_THROTTLE(1.0,
+                              "串口解析: 收到未支持的功能码 0x%02x，丢弃一个字节重同步, 原始预览=%s",
+                              static_cast<unsigned>(function_code),
+                              BytesToHexPreview(std::vector<uint8_t>(rx_buffer.begin(),
+                                                                     rx_buffer.begin() + std::min<std::size_t>(rx_buffer.size(), 12))).c_str());
+            rx_buffer.pop_front();
+            continue;
+        }
 
-        // 处理有效帧
+        if (rx_buffer.size() < expected_frame_length) {
+            return;
+        }
+
+        if (rx_buffer[expected_frame_length - 1] != kFrameTail) {
+            ++parse_error_count;
+            const std::vector<uint8_t> preview(rx_buffer.begin(),
+                                               rx_buffer.begin() + expected_frame_length);
+            ROS_WARN_THROTTLE(1.0,
+                              "串口解析: 长度或帧尾非法，丢弃一个字节重同步, 期望长度=%zu, 帧头=0x%02x, 功能码=0x%02x, 预览=%s",
+                              expected_frame_length,
+                              static_cast<unsigned>(frame_head),
+                              static_cast<unsigned>(function_code),
+                              BytesToHexPreview(preview).c_str());
+            rx_buffer.pop_front();
+            continue;
+        }
+
+        std::vector<uint8_t> frame(rx_buffer.begin(), rx_buffer.begin() + expected_frame_length);
         ROS_INFO_THROTTLE(1.0,
                           "串口解析: 命中完整帧, 长度=%zu, 帧头=0x%02x, 功能码=0x%02x",
-                          frame_length,
-                          static_cast<unsigned>(frame[0]),
-                          frame.size() > 1 ? static_cast<unsigned>(frame[1]) : 0U);
+                          expected_frame_length,
+                          static_cast<unsigned>(frame_head),
+                          static_cast<unsigned>(function_code));
         handle_valid_frame(frame);
-
-        // 移除已处理的数据
-        rx_buffer.erase(rx_buffer.begin(), rx_buffer.begin() + frame_length);
+        rx_buffer.erase(rx_buffer.begin(), rx_buffer.begin() + expected_frame_length);
     }
 
     // 防止缓冲区无限增长
@@ -282,138 +411,52 @@ void Linux_serial::process_rx_data() {
  */
 void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
 {
-    int a=frame.size();
-    switch (frame[0])
-    {
-    case 0x01:
-        if (a==8 && frame[1]==0x36 && frame[7]==0x6B){
-            // // 大端序（高位字节在前）,就这样转换
-            // uint32_t angle = ((uint32_t)frame[3] << 24) | 
-            //      ((uint32_t)frame[4] << 16) | 
-            //      ((uint32_t)frame[5] << 8)  | 
-            //      ((uint32_t)frame[6]);
-            // // 输出结果
-            // double c=(double)angle*360/65536;
-            // std::cout<<"实际角度:"<<c<< std::endl;
-        }else if(a==31 && frame[1]==0x43 && frame[30]==0x6B){
-            size_t idx =4;  // 从 frame[5] 开始
-            // 2. bus_voltage (2 bytes, 大端序)
-            servers.server1.state_pkg.bus_voltage = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            // 3. bus_phase_current (2 bytes)
-            servers.server1.state_pkg.bus_phase_current = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            // 4. encoder_value (2 bytes)
-            servers.server1.state_pkg.encoder_value = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            // 5. direction_tp (1 byte)
-            servers.server1.state_pkg.direction_tp = frame[idx++];
-            // 6. target_position (4 bytes, 大端序)
-            servers.server1. state_pkg.target_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
-                                (frame[idx + 2] << 8) | frame[idx + 3];
-            idx += 4;
-            // 7. direction_tv (1 byte)
-            servers.server1.state_pkg.direction_tv = frame[idx++];
-            // 8. target_velocity (2 bytes)
-            servers.server1.state_pkg.target_velocity = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            // 9. direction_cp (1 byte)
-            servers.server1.state_pkg.direction_cp = frame[idx++];
-            // 10. current_position (4 bytes)
-            servers.server1.state_pkg.current_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
-                                (frame[idx + 2] << 8) | frame[idx + 3];
-            idx += 4;
-            // 11. direction_pe (1 byte)
-            servers.server1.state_pkg.direction_pe = frame[idx++];
-            // 12. position_error (4 bytes)
-            servers.server1.state_pkg.position_error = (frame[idx] << 24) | (frame[idx + 1] << 16) |
-                                (frame[idx + 2] << 8) | frame[idx + 3];
-            idx += 4;
-            // 13. ready_status (1 byte)
-            servers.server1.state_pkg.ready_status = frame[idx++];
-            // 14. motor_status (1 byte)
-            servers.server1.state_pkg.motor_status = frame[idx];
-            servers.server1.State_show();
-            // 这里把 1 号驱动器的原始状态翻译成中文日志，方便在现场快速判断：
-            // 是目标命令没有被板子接收，还是板子接收了但电机/反馈没有更新。
-            LogDriverStateThrottle("1号驱动器", servers.server1);
-        }
-        break;
-    case 0x02:
-        if (a==8 && frame[1]==0x36 && frame[7]==0x6B){
-
-        }else if(a==31 && frame[1]==0x43 && frame[30]==0x6B){
-            size_t idx =4;  // 从 frame[5] 开始
-            servers.server2.state_pkg.bus_voltage = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            servers.server2.state_pkg.bus_phase_current = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            servers.server2.state_pkg.encoder_value = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            servers.server2.state_pkg.direction_tp = frame[idx++];
-            servers.server2. state_pkg.target_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
-                                (frame[idx + 2] << 8) | frame[idx + 3];
-            idx += 4;
-            servers.server2.state_pkg.direction_tv = frame[idx++];
-            servers.server2.state_pkg.target_velocity = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            servers.server2.state_pkg.direction_cp = frame[idx++];
-            servers.server2.state_pkg.current_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
-                                (frame[idx + 2] << 8) | frame[idx + 3];
-            idx += 4;
-            servers.server2.state_pkg.direction_pe = frame[idx++];
-            servers.server2.state_pkg.position_error = (frame[idx] << 24) | (frame[idx + 1] << 16) |
-                                (frame[idx + 2] << 8) | frame[idx + 3];
-            idx += 4;
-            servers.server2.state_pkg.ready_status = frame[idx++];
-            servers.server2.state_pkg.motor_status = frame[idx];
-            servers.server2.State_show();
-            // 2 号驱动器对应 arm2，单独打印中文状态，便于和 arm1 分开定位。
-            LogDriverStateThrottle("2号驱动器", servers.server2);
-        }
-        break;
-    case 0x03:
-        if (a==8 && frame[1]==0x36 && frame[7]==0x6B){
-
-        }else if(a==31 && frame[1]==0x43 && frame[30]==0x6B){
-            size_t idx =4;  // 从 frame[5] 开始
-            servers.server3.state_pkg.bus_voltage = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            servers.server3.state_pkg.bus_phase_current = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            servers.server3.state_pkg.encoder_value = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            servers.server3.state_pkg.direction_tp = frame[idx++];
-            servers.server3. state_pkg.target_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
-                                (frame[idx + 2] << 8) | frame[idx + 3];
-            idx += 4;
-            servers.server3.state_pkg.direction_tv = frame[idx++];
-            servers.server3.state_pkg.target_velocity = (frame[idx] << 8) | frame[idx + 1];
-            idx += 2;
-            servers.server3.state_pkg.direction_cp = frame[idx++];
-            servers.server3.state_pkg.current_position = (frame[idx] << 24) | (frame[idx + 1] << 16) |
-                                (frame[idx + 2] << 8) | frame[idx + 3];
-            idx += 4;
-            servers.server3.state_pkg.direction_pe = frame[idx++];
-            servers.server3.state_pkg.position_error = (frame[idx] << 24) | (frame[idx + 1] << 16) |
-                                (frame[idx + 2] << 8) | frame[idx + 3];
-            idx += 4;
-            servers.server3.state_pkg.ready_status = frame[idx++];
-            servers.server3.state_pkg.motor_status = frame[idx];
-            servers.server3.State_show();
-            // 3 号驱动器对应手爪/末端附加关节，保留同样的状态诊断格式，避免后续排查时信息不一致。
-            LogDriverStateThrottle("3号驱动器", servers.server3);
-        }
-        break;
-    default:
-        // 正常情况下帧头只应是 0x01/0x02/0x03/0x04。
-        // 如果走到这里，说明当前收到的帧格式和预期协议不一致，需要保留原始十六进制用于排查。
+    const int frame_size = static_cast<int>(frame.size());
+    Server_ *server = ServerByAddr(servers, frame[0]);
+    if (server == nullptr) {
         ROS_WARN_THROTTLE(1.0,
                           "串口解析: 收到未识别帧头 0x%02x, 长度=%d, 原始预览=%s",
                           static_cast<unsigned>(frame[0]),
-                          a,
-                          BytesToHexPreview(frame.data(), frame.size()).c_str());
-        break;
+                          frame_size,
+                          BytesToHexPreview(frame).c_str());
+        return;
     }
 
+    const uint8_t function_code = frame[1];
+    const ros::Time now = ros::Time::now();
+
+    if (function_code == 0x43 && frame_size == 31 && frame[30] == kFrameTail) {
+        DecodeStateFrameToServer(*server, frame);
+        last_state_frame_time = now;
+        last_state_frame_time_by_addr[frame[0]] = now;
+        LogDriverStateThrottle(DriverTagFromAddr(frame[0]), *server);
+        return;
+    }
+
+    if (function_code == 0xFD && frame_size == 4 && frame[3] == kFrameTail) {
+        last_ack_frame_time = now;
+        last_ack_frame_time_by_addr[frame[0]] = now;
+        ROS_INFO_THROTTLE(1.0,
+                          "%s 位置应答: 应答码=0x%02x, 原始预览=%s",
+                          DriverTagFromAddr(frame[0]),
+                          static_cast<unsigned>(frame[2]),
+                          BytesToHexPreview(frame).c_str());
+        return;
+    }
+
+    if (function_code == 0x36 && frame_size == 8 && frame[7] == kFrameTail) {
+        ROS_INFO_THROTTLE(1.0,
+                          "%s 当前位置回读: 原始预览=%s",
+                          DriverTagFromAddr(frame[0]),
+                          BytesToHexPreview(frame).c_str());
+        return;
+    }
+
+    ++parse_error_count;
+    ROS_WARN_THROTTLE(1.0,
+                      "串口解析: 收到未按预期匹配的完整帧, 帧头=0x%02x, 功能码=0x%02x, 长度=%d, 原始预览=%s",
+                      static_cast<unsigned>(frame[0]),
+                      static_cast<unsigned>(function_code),
+                      frame_size,
+                      BytesToHexPreview(frame).c_str());
 }
