@@ -7,6 +7,20 @@ double HostSideErrorDeg(double desired_deg, double feedback_deg) {
     return desired_deg - feedback_deg;
 }
 
+std::string BytesToHexPreview(const uint8_t *data, size_t len, size_t max_len = 12) {
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    const size_t preview_len = std::min(len, max_len);
+    for (size_t i = 0; i < preview_len; ++i) {
+        if (i != 0) oss << " ";
+        oss << "0x" << std::setw(2) << static_cast<unsigned>(data[i]);
+    }
+    if (len > preview_len) {
+        oss << " ...";
+    }
+    return oss.str();
+}
+
 void LogDriverStateThrottle(const char *tag, const Server_ &server) {
     // 这里额外打印驱动板返回的原始状态字段，是为了区分两类常见问题：
     // 1. 主机端命令已经发出，但驱动板没有真正接受/执行位置控制；
@@ -148,6 +162,15 @@ void Linux_serial::handle_read(const boost::system::error_code& error, size_t by
     {
         // 将新数据追加到缓冲区
         rx_buffer.insert(rx_buffer.end(), read_buf, read_buf + bytes_transferred);
+
+        // 这里增加一层“原始串口数据预览”，是为了确认 RX 回包是否真的进到了程序。
+        // 如果现场现象是“命令已发出，但驱动状态日志完全不出现”，那就需要先判断：
+        // 1. 是不是根本没有任何回包进入当前进程；
+        // 2. 还是回包已经来了，但格式和当前解析逻辑不匹配。
+        ROS_INFO_THROTTLE(1.0,
+                          "串口原始接收: 本次字节数=%zu, 预览=%s",
+                          bytes_transferred,
+                          BytesToHexPreview(read_buf, bytes_transferred).c_str());
         
         // 处理协议帧
         process_rx_data();
@@ -197,6 +220,11 @@ void Linux_serial::process_rx_data() {
 
         if (it == rx_buffer.end()) {
             // 没有任何有效帧头，清空缓冲区
+            const std::vector<uint8_t> preview_buffer(rx_buffer.begin(), rx_buffer.end());
+            ROS_WARN_THROTTLE(1.0,
+                              "串口解析: 缓冲区中没有识别到有效帧头，当前缓存长度=%zu, 预览=%s",
+                              rx_buffer.size(),
+                              BytesToHexPreview(preview_buffer.data(), preview_buffer.size()).c_str());
             rx_buffer.clear();
             return;
         }
@@ -211,6 +239,12 @@ void Linux_serial::process_rx_data() {
         auto end_it = std::find(rx_buffer.begin() + 1, rx_buffer.end(), 0x6B);
         if (end_it == rx_buffer.end()) {
             // 没有找到帧尾，等待更多数据
+            const size_t preview_size = std::min(rx_buffer.size(), static_cast<size_t>(8));
+            const std::vector<uint8_t> preview_buffer(rx_buffer.begin(), rx_buffer.begin() + preview_size);
+            ROS_WARN_THROTTLE(1.0,
+                              "串口解析: 已找到帧头但还没有帧尾，当前缓存长度=%zu, 帧头=%s",
+                              rx_buffer.size(),
+                              BytesToHexPreview(preview_buffer.data(), preview_buffer.size()).c_str());
             return;
         }
 
@@ -221,6 +255,11 @@ void Linux_serial::process_rx_data() {
         std::vector<uint8_t> frame(rx_buffer.begin(), rx_buffer.begin() + frame_length);
 
         // 处理有效帧
+        ROS_INFO_THROTTLE(1.0,
+                          "串口解析: 命中完整帧, 长度=%zu, 帧头=0x%02x, 功能码=0x%02x",
+                          frame_length,
+                          static_cast<unsigned>(frame[0]),
+                          frame.size() > 1 ? static_cast<unsigned>(frame[1]) : 0U);
         handle_valid_frame(frame);
 
         // 移除已处理的数据
@@ -366,7 +405,15 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
             LogDriverStateThrottle("3号驱动器", servers.server3);
         }
         break;
+    default:
+        // 正常情况下帧头只应是 0x01/0x02/0x03/0x04。
+        // 如果走到这里，说明当前收到的帧格式和预期协议不一致，需要保留原始十六进制用于排查。
+        ROS_WARN_THROTTLE(1.0,
+                          "串口解析: 收到未识别帧头 0x%02x, 长度=%d, 原始预览=%s",
+                          static_cast<unsigned>(frame[0]),
+                          a,
+                          BytesToHexPreview(frame.data(), frame.size()).c_str());
+        break;
     }
-    
-    
+
 }
