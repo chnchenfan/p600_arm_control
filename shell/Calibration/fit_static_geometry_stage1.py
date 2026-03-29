@@ -13,6 +13,7 @@
 # 当前支持两种模式：
 # - base_xyz_dq：拟合 [arm_base_offset_x/y/z, arm1_zero_offset, arm2_zero_offset]
 # - base_xyz_dq_l2：在 base_xyz_dq 基础上继续放开 L2_m
+# - base_xyz_dq_l1_l2：在 base_xyz_dq_l2 基础上继续放开 L1_m
 # - dx_only：只拟合 arm_base_offset_x_m，其余量固定为 0
 # - dx_l2：拟合 [arm_base_offset_x_m, L2_m]，其余量固定为 0
 #
@@ -47,6 +48,7 @@ FIT_MODE_FULL = "base_xyz_dq"
 FIT_MODE_DX_ONLY = "dx_only"
 FIT_MODE_DX_L2 = "dx_l2"
 FIT_MODE_FULL_L2 = "base_xyz_dq_l2"
+FIT_MODE_FULL_L1_L2 = "base_xyz_dq_l1_l2"
 
 
 @dataclass
@@ -89,7 +91,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fit-mode",
         default=FIT_MODE_FULL,
-        choices=[FIT_MODE_FULL, FIT_MODE_DX_ONLY, FIT_MODE_DX_L2, FIT_MODE_FULL_L2],
+        choices=[FIT_MODE_FULL, FIT_MODE_DX_ONLY, FIT_MODE_DX_L2, FIT_MODE_FULL_L2, FIT_MODE_FULL_L1_L2],
         help="Parameter subset to fit",
     )
     parser.add_argument("--synthetic-test", action="store_true", help="Run a self-check on synthetic data instead of reading a bag")
@@ -249,6 +251,8 @@ def expand_theta(free_theta: np.ndarray, fit_mode: str) -> np.ndarray:
         theta[:] = np.array(free_theta, dtype=float)
     elif fit_mode == FIT_MODE_FULL_L2:
         theta[:] = np.array(free_theta[:5], dtype=float)
+    elif fit_mode == FIT_MODE_FULL_L1_L2:
+        theta[:] = np.array(free_theta[:5], dtype=float)
     else:
         raise ValueError("unsupported fit_mode: %s" % fit_mode)
     return theta
@@ -272,12 +276,16 @@ def residual_vector_from_full_theta(theta: np.ndarray, samples: Sequence[SampleM
 def compute_residual_vector(free_theta: np.ndarray, samples: Sequence[SampleMean], l1_m: float, l2_m: float, fit_mode: str) -> np.ndarray:
     # 构造拟合器使用的残差。不同模式下只放开不同子集的参数。
     theta = expand_theta(free_theta, fit_mode)
+    effective_l1 = l1_m
     effective_l2 = l2_m
     if fit_mode == FIT_MODE_DX_L2:
         effective_l2 = float(free_theta[1])
     elif fit_mode == FIT_MODE_FULL_L2:
         effective_l2 = float(free_theta[5])
-    return residual_vector_from_full_theta(theta, samples, l1_m, effective_l2)
+    elif fit_mode == FIT_MODE_FULL_L1_L2:
+        effective_l1 = float(free_theta[5])
+        effective_l2 = float(free_theta[6])
+    return residual_vector_from_full_theta(theta, samples, effective_l1, effective_l2)
 
 
 def residual_norms(full_theta: np.ndarray, samples: Sequence[SampleMean], l1_m: float, l2_m: float) -> List[float]:
@@ -312,6 +320,12 @@ def fit_stage1(samples: Sequence[SampleMean], l1_m: float, l2_m: float, fit_mode
         initial_free = np.array([0.0, 0.0, 0.0, 0.0, 0.0, l2_m], dtype=float)
         lower = np.array([-0.08, -0.08, -0.08, -20.0, -20.0, 0.15], dtype=float)
         upper = np.array([0.08, 0.08, 0.08, 20.0, 20.0, 0.35], dtype=float)
+    elif fit_mode == FIT_MODE_FULL_L1_L2:
+        # L1/L2 与零偏、base 外参之间存在明显耦合，所以这里把范围收紧到
+        # “围绕当前实测值的小范围修正”，避免优化器用极端长度去硬补模型残差。
+        initial_free = np.array([0.0, 0.0, 0.0, 0.0, 0.0, l1_m, l2_m], dtype=float)
+        lower = np.array([-0.08, -0.08, -0.08, -20.0, -20.0, max(0.05, l1_m - 0.08), max(0.10, l2_m - 0.10)], dtype=float)
+        upper = np.array([0.08, 0.08, 0.08, 20.0, 20.0, l1_m + 0.08, l2_m + 0.10], dtype=float)
     else:
         raise ValueError("unsupported fit_mode: %s" % fit_mode)
 
@@ -329,10 +343,19 @@ def fit_stage1(samples: Sequence[SampleMean], l1_m: float, l2_m: float, fit_mode
     elif fit_mode == FIT_MODE_FULL_L2:
         fitted_l2 = float(result.x[5])
         initial_l2 = float(initial_free[5])
+    elif fit_mode == FIT_MODE_FULL_L1_L2:
+        fitted_l2 = float(result.x[6])
+        initial_l2 = float(initial_free[6])
     else:
         fitted_l2 = float(l2_m)
         initial_l2 = float(l2_m)
-    return result, initial_full, fitted_full, initial_l2, fitted_l2
+    if fit_mode == FIT_MODE_FULL_L1_L2:
+        fitted_l1 = float(result.x[5])
+        initial_l1 = float(initial_free[5])
+    else:
+        fitted_l1 = float(l1_m)
+        initial_l1 = float(l1_m)
+    return result, initial_full, fitted_full, initial_l1, fitted_l1, initial_l2, fitted_l2
 
 
 def write_sample_csv(path: str, samples: Sequence[SampleMean]) -> None:
@@ -390,15 +413,17 @@ def build_result_dict(
     initial_theta: np.ndarray,
     fitted_theta: np.ndarray,
     samples: Sequence[SampleMean],
-    l1_m: float,
+    initial_l1_m: float,
+    fitted_l1_m: float,
     initial_l2_m: float,
     fitted_l2_m: float,
 ) -> Dict[str, object]:
-    initial_residual_vector = residual_vector_from_full_theta(initial_theta, samples, l1_m, initial_l2_m)
-    fitted_residual_vector = residual_vector_from_full_theta(fitted_theta, samples, l1_m, fitted_l2_m)
+    initial_residual_vector = residual_vector_from_full_theta(initial_theta, samples, initial_l1_m, initial_l2_m)
+    fitted_residual_vector = residual_vector_from_full_theta(fitted_theta, samples, fitted_l1_m, fitted_l2_m)
     return {
         "fit_mode": fit_mode,
-        "l1_m": l1_m,
+        "initial_l1_m": initial_l1_m,
+        "fitted_l1_m": fitted_l1_m,
         "initial_l2_m": initial_l2_m,
         "fitted_l2_m": fitted_l2_m,
         "sample_count": len(samples),
@@ -418,7 +443,7 @@ def build_result_dict(
         },
         "initial_rms_m": rms_from_residual_vector(initial_residual_vector),
         "fitted_rms_m": rms_from_residual_vector(fitted_residual_vector),
-        "per_sample_residual_norm_m": residual_norms(fitted_theta, samples, l1_m, fitted_l2_m),
+        "per_sample_residual_norm_m": residual_norms(fitted_theta, samples, fitted_l1_m, fitted_l2_m),
         "optimizer": {
             "success": bool(result.success),
             "status": int(result.status),
@@ -437,7 +462,9 @@ def print_launch_snippet(result_dict: Dict[str, object]) -> None:
     print('<param name="arm_base_offset_z_m" value="%.6f" />' % theta["arm_base_offset_z_m"])
     print('<param name="arm1_zero_offset_deg" value="%.6f" />' % theta["arm1_zero_offset_deg"])
     print('<param name="arm2_zero_offset_deg" value="%.6f" />' % theta["arm2_zero_offset_deg"])
-    if result_dict.get("fit_mode") in (FIT_MODE_DX_L2, FIT_MODE_FULL_L2):
+    if result_dict.get("fit_mode") == FIT_MODE_FULL_L1_L2:
+        print('<param name="L1_m" value="%.6f" />' % result_dict['fitted_l1_m'])
+    if result_dict.get("fit_mode") in (FIT_MODE_DX_L2, FIT_MODE_FULL_L2, FIT_MODE_FULL_L1_L2):
         print('<param name="L2_m" value="%.6f" />' % result_dict['fitted_l2_m'])
 
 
@@ -471,7 +498,7 @@ def run_synthetic_test() -> int:
             )
         )
 
-    result, _, fitted_full, _, fitted_l2 = fit_stage1(samples, l1_m, l2_m, FIT_MODE_FULL)
+    result, _, fitted_full, _, _, _, fitted_l2 = fit_stage1(samples, l1_m, l2_m, FIT_MODE_FULL)
     error = np.abs(fitted_full - true_theta)
     print("synthetic_true_theta=", true_theta.tolist())
     print("synthetic_fitted_theta=", fitted_full.tolist())
@@ -505,8 +532,8 @@ def main() -> int:
     if not samples:
         raise SystemExit("no valid sample means were generated")
 
-    result, initial_full, fitted_full, initial_l2_m, fitted_l2_m = fit_stage1(samples, args.l1, args.l2, args.fit_mode)
-    result_dict = build_result_dict(args.fit_mode, result, initial_full, fitted_full, samples, args.l1, initial_l2_m, fitted_l2_m)
+    result, initial_full, fitted_full, initial_l1_m, fitted_l1_m, initial_l2_m, fitted_l2_m = fit_stage1(samples, args.l1, args.l2, args.fit_mode)
+    result_dict = build_result_dict(args.fit_mode, result, initial_full, fitted_full, samples, initial_l1_m, fitted_l1_m, initial_l2_m, fitted_l2_m)
 
     csv_path = os.path.join(output_dir, "sample_means.csv")
     json_path = os.path.join(output_dir, "fit_result.json")
@@ -520,6 +547,10 @@ def main() -> int:
     print("fit_json=%s" % json_path)
     print("initial_rms_m=%.6f" % result_dict["initial_rms_m"])
     print("fitted_rms_m=%.6f" % result_dict["fitted_rms_m"])
+    if args.fit_mode == FIT_MODE_FULL_L1_L2:
+        print("fitted_l1_m=%.6f" % result_dict["fitted_l1_m"])
+    if args.fit_mode in (FIT_MODE_DX_L2, FIT_MODE_FULL_L2, FIT_MODE_FULL_L1_L2):
+        print("fitted_l2_m=%.6f" % result_dict["fitted_l2_m"])
     print_launch_snippet(result_dict)
     return 0
 

@@ -583,10 +583,16 @@ int main(int argc, char *argv[]) {
         ee_hold_world = {explicit_hold_x, explicit_hold_y, explicit_hold_z};
     };
 
-    auto ResetMetrics = [&]() {
+    auto ResetRunMetrics = [&]() {
         metrics = RunMetrics();
         ik_fail_count = 0;
         pose_loss_count = 0;
+    };
+
+    auto ResetFreezeDiagnostics = [&]() {
+        // freeze_diag 只用于记录“冻结瞬间”的几何一致性诊断。
+        // 这里单独拆出来，是为了避免进入运行阶段后把刚刚算出的冻结诊断清掉，
+        // 导致最终 summary 打印成 0 / -1 这类无效默认值。
         freeze_diag = FreezeDiagnostics();
     };
 
@@ -788,7 +794,8 @@ int main(int argc, char *argv[]) {
                 }
                 if ((now - in_tolerance_since).toSec() >= preposition_confirm_sec) {
                     ResetHoldCapture();
-                    ResetMetrics();
+                    ResetRunMetrics();
+                    ResetFreezeDiagnostics();
                     in_tolerance = false;
                     suite_phase = (suite_phase == SuitePhase::kPrepositionStatic) ? SuitePhase::kFreezeStaticHold : SuitePhase::kFreezeVirtualHold;
                     phase_start = now;
@@ -832,7 +839,7 @@ int main(int argc, char *argv[]) {
                              freeze_diag.freeze_fk_hold_error_m, freeze_diag.valid ? "true" : "false");
                 }
                 phase_start = now;
-                ResetMetrics();
+                ResetRunMetrics();
                 suite_phase = (suite_phase == SuitePhase::kFreezeStaticHold) ? SuitePhase::kRunStatic : SuitePhase::kRunVirtual;
                 active_step_index = 0;
                 if (suite_phase == SuitePhase::kRunStatic) {
@@ -954,7 +961,7 @@ int main(int argc, char *argv[]) {
                     virtual_disturbance_passed = true;
                     suite_phase = SuitePhase::kDone;
                 } else {
-                    ResetMetrics();
+                    ResetRunMetrics();
                     phase_start = now;
                 }
             }
