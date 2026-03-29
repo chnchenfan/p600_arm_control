@@ -16,7 +16,7 @@ void LogDriverStateThrottle(const char *tag, const Server_ &server) {
     // 需要连同 ready_status / motor_status / target_position / current_position 一起看，
     // 才能判断问题是在“板子不动”还是“状态解析没跟上”。
     ROS_INFO_THROTTLE(1.0,
-                      "%s driver state: ready=%u, motor=%u, tp_dir=%u, cp_dir=%u, target_pulse=%u, current_pulse=%u, pos_err_pulse=%u, host_target_deg=%.2f, feedback_deg=%.2f, board_err_deg=%.2f",
+                      "%s 驱动状态: 就绪=%u, 电机状态=%u, 目标方向=%u, 当前位置方向=%u, 目标脉冲=%u, 当前位置脉冲=%u, 位置误差脉冲=%u, 主机目标角=%.2f, 反馈角=%.2f, 板载误差角=%.2f",
                       tag,
                       static_cast<unsigned>(server.state_pkg.ready_status),
                       static_cast<unsigned>(server.state_pkg.motor_status),
@@ -106,7 +106,7 @@ void Linux_serial::Send_all_data(){
                       // 之前遇到的现象是：desired 已经变成 -5 deg，但 feedback 仍然是 0，
                       // 同时 board_err 也还是 0。为避免“板子上报误差为 0”误导判断，
                       // 这里必须把 host_err 也一起打出来。
-                      "serial loop: desired=(%.2f, %.2f, %.2f), feedback=(%.2f, %.2f, %.2f), board_err=(%.2f, %.2f, %.2f), host_err=(%.2f, %.2f, %.2f)",
+                      "串口循环: 目标角=(%.2f, %.2f, %.2f), 反馈角=(%.2f, %.2f, %.2f), 板载误差=(%.2f, %.2f, %.2f), 主机误差=(%.2f, %.2f, %.2f)",
                       servers.server1.pos_angle_s, servers.server2.pos_angle_s, servers.server3.pos_angle_s,
                       servers.server1.pos_angle_r, servers.server2.pos_angle_r, servers.server3.pos_angle_r,
                       servers.server1.pos_error, servers.server2.pos_error, servers.server3.pos_error,
@@ -295,7 +295,9 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
             // 14. motor_status (1 byte)
             servers.server1.state_pkg.motor_status = frame[idx];
             servers.server1.State_show();
-            LogDriverStateThrottle("server1", servers.server1);
+            // 这里把 1 号驱动器的原始状态翻译成中文日志，方便在现场快速判断：
+            // 是目标命令没有被板子接收，还是板子接收了但电机/反馈没有更新。
+            LogDriverStateThrottle("1号驱动器", servers.server1);
         }
         break;
     case 0x02:
@@ -327,7 +329,8 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
             servers.server2.state_pkg.ready_status = frame[idx++];
             servers.server2.state_pkg.motor_status = frame[idx];
             servers.server2.State_show();
-            LogDriverStateThrottle("server2", servers.server2);
+            // 2 号驱动器对应 arm2，单独打印中文状态，便于和 arm1 分开定位。
+            LogDriverStateThrottle("2号驱动器", servers.server2);
         }
         break;
     case 0x03:
@@ -359,7 +362,8 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
             servers.server3.state_pkg.ready_status = frame[idx++];
             servers.server3.state_pkg.motor_status = frame[idx];
             servers.server3.State_show();
-            LogDriverStateThrottle("server3", servers.server3);
+            // 3 号驱动器对应手爪/末端附加关节，保留同样的状态诊断格式，避免后续排查时信息不一致。
+            LogDriverStateThrottle("3号驱动器", servers.server3);
         }
         break;
     }
