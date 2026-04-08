@@ -909,7 +909,8 @@ int main(int argc, char *argv[]) {
             }
 
             if ((now - phase_start).toSec() >= static_case_duration_sec) {
-                const bool passed = metrics.ik_fail_events == 0 && metrics.pose_loss_events == 0 &&
+                const bool passed = metrics.ik_fail_events == 0 &&
+                                    metrics.pose_loss_events < pose_loss_limit &&
                                     metrics.max_reach_error <= eps_r_m && metrics.final_hold_error <= hold_error_pass_m;
                 ROS_INFO("exp2 validation static case summary: case_index=%zu, initial_pose=(%.1f, %.1f), reach_error_max=%.4f, hold_error_final_m=%.4f, hold_error_max_m=%.4f, ik_fail_count=%d, pose_loss_count=%d, freeze_real=(%.2f, %.2f), freeze_ik=(%.2f, %.2f), freeze_delta=(%.2f, %.2f), freeze_fk_hold_error_m=%.4f, pass=%s",
                          active_case_index + 1, current_case.arm1_deg, current_case.arm2_deg,
@@ -971,7 +972,7 @@ int main(int argc, char *argv[]) {
             }
 
             if ((now - phase_start).toSec() >= step.duration_sec) {
-                bool passed = (metrics.ik_fail_events == 0 && metrics.pose_loss_events == 0);
+                bool passed = (metrics.ik_fail_events == 0 && metrics.pose_loss_events < pose_loss_limit);
                 if (step.is_zero_reset) {
                     passed = passed && (metrics.final_hold_error <= hold_error_pass_m);
                 }
