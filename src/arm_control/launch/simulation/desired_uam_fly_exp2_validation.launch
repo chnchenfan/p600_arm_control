@@ -43,7 +43,7 @@
         <param name="ee_outer_kp" value="0.25" />
         <param name="ee_outer_clip_m" value="0.03" />
 
-        <param name="pose_timeout_sec" value="0.5" />
+        <param name="pose_timeout_sec" value="0.8" />
         <param name="eps_r_m" value="0.01" />
         <param name="eps_xy_m" value="0.015" />
         <param name="ik_fail_limit" value="10" />
