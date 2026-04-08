@@ -85,19 +85,19 @@ void LogDriverStateThrottle(const char *tag, const Server_ &server) {
     // 当 real_d 已经变化、feedback 仍长期不变时，只看角度日志不够，
     // 需要连同 ready_status / motor_status / target_position / current_position 一起看，
     // 才能判断问题是在“板子不动”还是“状态解析没跟上”。
-    ROS_INFO_THROTTLE(1.0,
-                      "%s 驱动状态: 就绪=%u, 电机状态=%u, 目标方向=%u, 当前位置方向=%u, 目标脉冲=%u, 当前位置脉冲=%u, 位置误差脉冲=%u, 主机目标角=%.2f, 反馈角=%.2f, 板载误差角=%.2f",
-                      tag,
-                      static_cast<unsigned>(server.state_pkg.ready_status),
-                      static_cast<unsigned>(server.state_pkg.motor_status),
-                      static_cast<unsigned>(server.state_pkg.direction_tp),
-                      static_cast<unsigned>(server.state_pkg.direction_cp),
-                      static_cast<unsigned>(server.state_pkg.target_position),
-                      static_cast<unsigned>(server.state_pkg.current_position),
-                      static_cast<unsigned>(server.state_pkg.position_error),
-                      server.pos_angle_s,
-                      server.pos_angle_r,
-                      server.pos_error);
+    // ROS_INFO_THROTTLE(1.0,
+    //                   "%s 驱动状态: 就绪=%u, 电机状态=%u, 目标方向=%u, 当前位置方向=%u, 目标脉冲=%u, 当前位置脉冲=%u, 位置误差脉冲=%u, 主机目标角=%.2f, 反馈角=%.2f, 板载误差角=%.2f",
+    //                   tag,
+    //                   static_cast<unsigned>(server.state_pkg.ready_status),
+    //                   static_cast<unsigned>(server.state_pkg.motor_status),
+    //                   static_cast<unsigned>(server.state_pkg.direction_tp),
+    //                   static_cast<unsigned>(server.state_pkg.direction_cp),
+    //                   static_cast<unsigned>(server.state_pkg.target_position),
+    //                   static_cast<unsigned>(server.state_pkg.current_position),
+    //                   static_cast<unsigned>(server.state_pkg.position_error),
+    //                   server.pos_angle_s,
+    //                   server.pos_angle_r,
+    //                   server.pos_error);
 }
 
 void DecodeStateFrameToServer(Server_ &server, const std::vector<uint8_t> &frame) {
@@ -200,41 +200,41 @@ void Linux_serial::Send_all_data(){
     const bool state_recent = !last_state_frame_time.isZero() && (now - last_state_frame_time).toSec() <= 1.0;
     const bool ack_recent = !last_ack_frame_time.isZero() && (now - last_ack_frame_time).toSec() <= 1.0;
 
-    ROS_INFO_THROTTLE(1.0,
-                      // 这里同时打印两种误差：
-                      // 1. board_err：驱动板在状态包里返回的位置误差；
-                      // 2. host_err：主机端直接用 desired-feedback 算出来的真实角度差。
-                      //
-                      // 之前遇到的现象是：desired 已经变成 -5 deg，但 feedback 仍然是 0，
-                      // 同时 board_err 也还是 0。为避免“板子上报误差为 0”误导判断，
-                      // 这里必须把 host_err 也一起打出来。
-                      "串口循环: 目标角=(%.2f, %.2f, %.2f), 反馈角=(%.2f, %.2f, %.2f), 板载误差=(%.2f, %.2f, %.2f), 主机误差=(%.2f, %.2f, %.2f)",
-                      servers.server1.pos_angle_s, servers.server2.pos_angle_s, servers.server3.pos_angle_s,
-                      servers.server1.pos_angle_r, servers.server2.pos_angle_r, servers.server3.pos_angle_r,
-                      servers.server1.pos_error, servers.server2.pos_error, servers.server3.pos_error,
-                      arm1_host_error, arm2_host_error, hand_host_error);
+    // ROS_INFO_THROTTLE(1.0,
+    //                   // 这里同时打印两种误差：
+    //                   // 1. board_err：驱动板在状态包里返回的位置误差；
+    //                   // 2. host_err：主机端直接用 desired-feedback 算出来的真实角度差。
+    //                   //
+    //                   // 之前遇到的现象是：desired 已经变成 -5 deg，但 feedback 仍然是 0，
+    //                   // 同时 board_err 也还是 0。为避免“板子上报误差为 0”误导判断，
+    //                   // 这里必须把 host_err 也一起打出来。
+    //                   "串口循环: 目标角=(%.2f, %.2f, %.2f), 反馈角=(%.2f, %.2f, %.2f), 板载误差=(%.2f, %.2f, %.2f), 主机误差=(%.2f, %.2f, %.2f)",
+    //                   servers.server1.pos_angle_s, servers.server2.pos_angle_s, servers.server3.pos_angle_s,
+    //                   servers.server1.pos_angle_r, servers.server2.pos_angle_r, servers.server3.pos_angle_r,
+    //                   servers.server1.pos_error, servers.server2.pos_error, servers.server3.pos_error,
+    //                   arm1_host_error, arm2_host_error, hand_host_error);
 
     // 这里保留一条简短的中文健康提示，用来快速判断接收链路当前处于哪一类状态：
     // 1. 最近完全没有任何回包；
     // 2. 只收到了位置控制应答，没有收到完整状态帧；
     // 3. 状态帧恢复正常，可以继续看高层几何与控制问题。
-    if (!rx_recent) {
-        ROS_WARN_THROTTLE(1.0,
-                          "串口接收健康: 最近1秒未收到任何回包, 解析错误累计=%zu",
-                          parse_error_count);
-    } else if (!state_recent && ack_recent) {
-        ROS_WARN_THROTTLE(1.0,
-                          "串口接收健康: 最近1秒只收到位置应答，未收到状态帧, 解析错误累计=%zu",
-                          parse_error_count);
-    } else if (state_recent) {
-        ROS_INFO_THROTTLE(1.0,
-                          "串口接收健康: 最近1秒状态帧正常, 解析错误累计=%zu",
-                          parse_error_count);
-    } else {
-        ROS_WARN_THROTTLE(1.0,
-                          "串口接收健康: 最近1秒收到回包，但尚未识别到状态帧或位置应答, 解析错误累计=%zu",
-                          parse_error_count);
-    }
+    // if (!rx_recent) {
+    //     ROS_WARN_THROTTLE(1.0,
+    //                       "串口接收健康: 最近1秒未收到任何回包, 解析错误累计=%zu",
+    //                       parse_error_count);
+    // } else if (!state_recent && ack_recent) {
+    //     ROS_WARN_THROTTLE(1.0,
+    //                       "串口接收健康: 最近1秒只收到位置应答，未收到状态帧, 解析错误累计=%zu",
+    //                       parse_error_count);
+    // } else if (state_recent) {
+    //     ROS_INFO_THROTTLE(1.0,
+    //                       "串口接收健康: 最近1秒状态帧正常, 解析错误累计=%zu",
+    //                       parse_error_count);
+    // } else {
+    //     ROS_WARN_THROTTLE(1.0,
+    //                       "串口接收健康: 最近1秒收到回包，但尚未识别到状态帧或位置应答, 解析错误累计=%zu",
+    //                       parse_error_count);
+    // }
 
 }
 
@@ -278,10 +278,10 @@ void Linux_serial::handle_read(const boost::system::error_code& error, size_t by
         // 如果现场现象是“命令已发出，但驱动状态日志完全不出现”，那就需要先判断：
         // 1. 是不是根本没有任何回包进入当前进程；
         // 2. 还是回包已经来了，但格式和当前解析逻辑不匹配。
-        ROS_INFO_THROTTLE(1.0,
-                          "串口原始接收: 本次字节数=%zu, 预览=%s",
-                          bytes_transferred,
-                          BytesToHexPreview(read_buf, bytes_transferred).c_str());
+        // ROS_INFO_THROTTLE(1.0,
+        //                   "串口原始接收: 本次字节数=%zu, 预览=%s",
+        //                   bytes_transferred,
+        //                   BytesToHexPreview(read_buf, bytes_transferred).c_str());
         
         // 处理协议帧
         process_rx_data();
@@ -328,20 +328,20 @@ void Linux_serial::process_rx_data() {
 
         if (it == rx_buffer.end()) {
             const std::vector<uint8_t> preview_buffer(rx_buffer.begin(), rx_buffer.end());
-            ROS_WARN_THROTTLE(1.0,
-                              "串口解析: 缓冲区中没有识别到有效帧头，当前缓存长度=%zu, 预览=%s",
-                              rx_buffer.size(),
-                              BytesToHexPreview(preview_buffer).c_str());
+            // ROS_WARN_THROTTLE(1.0,
+            //                   "串口解析: 缓冲区中没有识别到有效帧头，当前缓存长度=%zu, 预览=%s",
+            //                   rx_buffer.size(),
+            //                   BytesToHexPreview(preview_buffer).c_str());
             rx_buffer.clear();
             return;
         }
 
         if (it != rx_buffer.begin()) {
             const std::vector<uint8_t> dropped(rx_buffer.begin(), it);
-            ROS_WARN_THROTTLE(1.0,
-                              "串口解析: 丢弃帧头前的无效字节, 长度=%zu, 预览=%s",
-                              dropped.size(),
-                              BytesToHexPreview(dropped).c_str());
+            // ROS_WARN_THROTTLE(1.0,
+            //                   "串口解析: 丢弃帧头前的无效字节, 长度=%zu, 预览=%s",
+            //                   dropped.size(),
+            //                   BytesToHexPreview(dropped).c_str());
             rx_buffer.erase(rx_buffer.begin(), it);
         }
 
@@ -358,11 +358,11 @@ void Linux_serial::process_rx_data() {
         // 后面的缓冲区也会整体错位，最终造成 arm2 状态反馈长期异常。
         if (expected_frame_length == 0) {
             ++parse_error_count;
-            ROS_WARN_THROTTLE(1.0,
-                              "串口解析: 收到未支持的功能码 0x%02x，丢弃一个字节重同步, 原始预览=%s",
-                              static_cast<unsigned>(function_code),
-                              BytesToHexPreview(std::vector<uint8_t>(rx_buffer.begin(),
-                                                                     rx_buffer.begin() + std::min<std::size_t>(rx_buffer.size(), 12))).c_str());
+            // ROS_WARN_THROTTLE(1.0,
+            //                   "串口解析: 收到未支持的功能码 0x%02x，丢弃一个字节重同步, 原始预览=%s",
+            //                   static_cast<unsigned>(function_code),
+            //                   BytesToHexPreview(std::vector<uint8_t>(rx_buffer.begin(),
+            //                                                          rx_buffer.begin() + std::min<std::size_t>(rx_buffer.size(), 12))).c_str());
             rx_buffer.pop_front();
             continue;
         }
@@ -375,22 +375,22 @@ void Linux_serial::process_rx_data() {
             ++parse_error_count;
             const std::vector<uint8_t> preview(rx_buffer.begin(),
                                                rx_buffer.begin() + expected_frame_length);
-            ROS_WARN_THROTTLE(1.0,
-                              "串口解析: 长度或帧尾非法，丢弃一个字节重同步, 期望长度=%zu, 帧头=0x%02x, 功能码=0x%02x, 预览=%s",
-                              expected_frame_length,
-                              static_cast<unsigned>(frame_head),
-                              static_cast<unsigned>(function_code),
-                              BytesToHexPreview(preview).c_str());
+            // ROS_WARN_THROTTLE(1.0,
+            //                   "串口解析: 长度或帧尾非法，丢弃一个字节重同步, 期望长度=%zu, 帧头=0x%02x, 功能码=0x%02x, 预览=%s",
+            //                   expected_frame_length,
+            //                   static_cast<unsigned>(frame_head),
+            //                   static_cast<unsigned>(function_code),
+            //                   BytesToHexPreview(preview).c_str());
             rx_buffer.pop_front();
             continue;
         }
 
         std::vector<uint8_t> frame(rx_buffer.begin(), rx_buffer.begin() + expected_frame_length);
-        ROS_INFO_THROTTLE(1.0,
-                          "串口解析: 命中完整帧, 长度=%zu, 帧头=0x%02x, 功能码=0x%02x",
-                          expected_frame_length,
-                          static_cast<unsigned>(frame_head),
-                          static_cast<unsigned>(function_code));
+        // ROS_INFO_THROTTLE(1.0,
+        //                   "串口解析: 命中完整帧, 长度=%zu, 帧头=0x%02x, 功能码=0x%02x",
+        //                   expected_frame_length,
+        //                   static_cast<unsigned>(frame_head),
+        //                   static_cast<unsigned>(function_code));
         handle_valid_frame(frame);
         rx_buffer.erase(rx_buffer.begin(), rx_buffer.begin() + expected_frame_length);
     }
@@ -414,11 +414,11 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
     const int frame_size = static_cast<int>(frame.size());
     Server_ *server = ServerByAddr(servers, frame[0]);
     if (server == nullptr) {
-        ROS_WARN_THROTTLE(1.0,
-                          "串口解析: 收到未识别帧头 0x%02x, 长度=%d, 原始预览=%s",
-                          static_cast<unsigned>(frame[0]),
-                          frame_size,
-                          BytesToHexPreview(frame).c_str());
+        // ROS_WARN_THROTTLE(1.0,
+        //                   "串口解析: 收到未识别帧头 0x%02x, 长度=%d, 原始预览=%s",
+        //                   static_cast<unsigned>(frame[0]),
+        //                   frame_size,
+        //                   BytesToHexPreview(frame).c_str());
         return;
     }
 
@@ -436,27 +436,27 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
     if (function_code == 0xFD && frame_size == 4 && frame[3] == kFrameTail) {
         last_ack_frame_time = now;
         last_ack_frame_time_by_addr[frame[0]] = now;
-        ROS_INFO_THROTTLE(1.0,
-                          "%s 位置应答: 应答码=0x%02x, 原始预览=%s",
-                          DriverTagFromAddr(frame[0]),
-                          static_cast<unsigned>(frame[2]),
-                          BytesToHexPreview(frame).c_str());
+        // ROS_INFO_THROTTLE(1.0,
+        //                   "%s 位置应答: 应答码=0x%02x, 原始预览=%s",
+        //                   DriverTagFromAddr(frame[0]),
+        //                   static_cast<unsigned>(frame[2]),
+        //                   BytesToHexPreview(frame).c_str());
         return;
     }
 
     if (function_code == 0x36 && frame_size == 8 && frame[7] == kFrameTail) {
-        ROS_INFO_THROTTLE(1.0,
-                          "%s 当前位置回读: 原始预览=%s",
-                          DriverTagFromAddr(frame[0]),
-                          BytesToHexPreview(frame).c_str());
+        // ROS_INFO_THROTTLE(1.0,
+        //                   "%s 当前位置回读: 原始预览=%s",
+        //                   DriverTagFromAddr(frame[0]),
+        //                   BytesToHexPreview(frame).c_str());
         return;
     }
 
     ++parse_error_count;
-    ROS_WARN_THROTTLE(1.0,
-                      "串口解析: 收到未按预期匹配的完整帧, 帧头=0x%02x, 功能码=0x%02x, 长度=%d, 原始预览=%s",
-                      static_cast<unsigned>(frame[0]),
-                      static_cast<unsigned>(function_code),
-                      frame_size,
-                      BytesToHexPreview(frame).c_str());
+    // ROS_WARN_THROTTLE(1.0,
+    //                   "串口解析: 收到未按预期匹配的完整帧, 帧头=0x%02x, 功能码=0x%02x, 长度=%d, 原始预览=%s",
+    //                   static_cast<unsigned>(frame[0]),
+    //                   static_cast<unsigned>(function_code),
+    //                   frame_size,
+    //                   BytesToHexPreview(frame).c_str());
 }

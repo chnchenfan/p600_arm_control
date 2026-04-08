@@ -52,7 +52,10 @@ struct DisturbanceStep {
 struct ControlResult {
     bool inputs_ready = false;
     bool solved = false;
+    bool radius_projected = false;
     double reach_error = -1.0;
+    double raw_radius = -1.0;
+    double raw_radius_minus_l2 = 0.0;
     double radius = -1.0;
     double radius_minus_l2 = 0.0;
     double hold_error_world = std::numeric_limits<double>::infinity();
@@ -126,6 +129,13 @@ Vec3 ClampVec3Norm(const Vec3 &value, double max_norm) {
     const double norm = NormVec3(value);
     if (norm <= max_norm || norm < 1e-9) return value;
     return ScaleVec3(value, max_norm / norm);
+}
+
+Vec3 ProjectVec3ToNorm(const Vec3 &value, double target_norm) {
+    if (target_norm <= 0.0) return {0.0, 0.0, 0.0};
+    const double norm = NormVec3(value);
+    if (norm < 1e-9) return {target_norm, 0.0, 0.0};
+    return ScaleVec3(value, target_norm / norm);
 }
 
 double RateLimit(double target, double current, double max_delta) {
@@ -347,7 +357,8 @@ ControlResult ComputeControl(const PoseState &measured_base_pose,
                              double eps_r_m,
                              double eps_xy_m,
                              double previous_arm1_deg,
-                             double previous_arm2_deg) {
+                             double previous_arm2_deg,
+                             bool project_target_to_link_sphere) {
     ControlResult result;
     result.hold_error_world = NormVec3(SubVec3(ee_hold_world, measured_ee_pose.position));
     if (!base_fresh || !ee_fresh || !arm_fresh) {
@@ -362,6 +373,14 @@ ControlResult ComputeControl(const PoseState &measured_base_pose,
     const Vec3 correction_world = ClampVec3Norm(ScaleVec3(ee_error_world, ee_outer_kp), ee_outer_clip_m);
     const Vec3 correction_body = RotateWorldToBody(correction_world, control_base_pose);
     result.target_body = AddVec3(p_rel, correction_body);
+    result.raw_radius = NormVec3(result.target_body);
+    result.raw_radius_minus_l2 = result.raw_radius - l2_m;
+    if (project_target_to_link_sphere &&
+        result.raw_radius > 1e-9 &&
+        std::fabs(result.raw_radius - l2_m) > eps_r_m) {
+        result.target_body = ProjectVec3ToNorm(result.target_body, l2_m);
+        result.radius_projected = true;
+    }
     result.radius = NormVec3(result.target_body);
     result.radius_minus_l2 = result.radius - l2_m;
     double solved_arm1_deg = previous_arm1_deg;
@@ -647,6 +666,11 @@ int main(int argc, char *argv[]) {
             return;
         }
         pose_loss_count = 0;
+        if (result.radius_projected) {
+            ROS_WARN_THROTTLE(1.0, "exp2 validation virtual projected target to reachable shell: raw_radius=%.4f, L2=%.4f, raw_radius_minus_l2=%.4f, target=(%.3f, %.3f, %.3f)",
+                              result.raw_radius, l2_m, result.raw_radius_minus_l2,
+                              result.target_body.x, result.target_body.y, result.target_body.z);
+        }
         if (!result.solved) {
             ++ik_fail_count;
             ++metrics.ik_fail_events;
@@ -717,7 +741,8 @@ int main(int argc, char *argv[]) {
                                                         arm1_zero_offset_deg, arm2_zero_offset_deg,
                                                         arm1_min, arm1_max, arm2_min, arm2_max,
                                                         eps_r_m, eps_xy_m,
-                                                        last_valid_arm1_deg, last_valid_arm2_deg);
+                                                        last_valid_arm1_deg, last_valid_arm2_deg,
+                                                        false);
             if (!result.inputs_ready) {
                 ++pose_loss_count;
                 ROS_WARN_THROTTLE(1.0, "exp2 static IK waiting for fresh data, base_fresh=%s, ee_fresh=%s, arm_fresh=%s (%d/%d)",
@@ -861,7 +886,8 @@ int main(int argc, char *argv[]) {
                                                         arm1_zero_offset_deg, arm2_zero_offset_deg,
                                                         arm1_min, arm1_max, arm2_min, arm2_max,
                                                         eps_r_m, eps_xy_m,
-                                                        last_valid_arm1_deg, last_valid_arm2_deg);
+                                                        last_valid_arm1_deg, last_valid_arm2_deg,
+                                                        false);
             UpdateRunMetrics(result, base_fresh, ee_fresh);
             PublishCurrent();
 
@@ -922,7 +948,8 @@ int main(int argc, char *argv[]) {
                                                         arm1_zero_offset_deg, arm2_zero_offset_deg,
                                                         arm1_min, arm1_max, arm2_min, arm2_max,
                                                         eps_r_m, eps_xy_m,
-                                                        last_valid_arm1_deg, last_valid_arm2_deg);
+                                                        last_valid_arm1_deg, last_valid_arm2_deg,
+                                                        true);
             UpdateRunMetrics(result, base_fresh, ee_fresh);
             PublishCurrent();
 
