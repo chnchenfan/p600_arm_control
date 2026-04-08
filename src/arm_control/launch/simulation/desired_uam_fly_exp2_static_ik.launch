@@ -21,14 +21,14 @@
         <param name="test_duration_sec" value="20.0" />
 
         <param name="L1_m" value="0.154859" />
-        <param name="L2_m" value="0.228584" />
+        <param name="L2_m" value="0.223951" />
 
-        <!-- 这组值来自 data/calibration/static/2026330_1 的 base_xyz_dq_l2 拟合，适用前提是已采用“arm1 增大对应 -y”的几何约定。 -->
-        <param name="arm_base_offset_x_m" value="0.022696" />
-        <param name="arm_base_offset_y_m" value="0.007497" />
-        <param name="arm_base_offset_z_m" value="0.000378" />
-        <param name="arm1_zero_offset_deg" value="-6.233935" />
-        <param name="arm2_zero_offset_deg" value="-20.000000" />
+        <!-- 这组值来自 data/calibration/static/20260408_1 的 base_xyz_dq_l2 拟合，适用前提是已采用“arm1 增大对应 -y”的几何约定。 -->
+        <param name="arm_base_offset_x_m" value="0.024759" />
+        <param name="arm_base_offset_y_m" value="0.006501" />
+        <param name="arm_base_offset_z_m" value="-0.005065" />
+        <param name="arm1_zero_offset_deg" value="-7.011313" />
+        <param name="arm2_zero_offset_deg" value="-5.434880" />
 
         <param name="use_initial_ee_hold" value="true" />
         <param name="hold_freeze_samples" value="5" />

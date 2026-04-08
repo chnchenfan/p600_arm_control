@@ -21,13 +21,13 @@
 
         <!-- 机械臂几何参数：L1 为基座到肩关节中心的竖直偏置，L2 为肩关节到末端工作点的长度 -->
         <param name="L1_m" value="0.154859" />
-        <param name="L2_m" value="0.228584" />
+        <param name="L2_m" value="0.223951" />
 
         <!-- arm_base 动捕刚体原点相对真实机械臂基座原点的体坐标系平移外参；代码内部按真实基座 = 刚体原点 - R*[dx,dy,dz] 处理 -->
-        <!-- 这组值来自 data/calibration/static/2026330_1 的 base_xyz_dq_l2 拟合，适用前提是已采用“arm1 增大对应 -y”的几何约定。 -->
-        <param name="arm_base_offset_x_m" value="0.022696" />
-        <param name="arm_base_offset_y_m" value="0.007497" />
-        <param name="arm_base_offset_z_m" value="0.000378" />
+        <!-- 这组值来自 data/calibration/static/20260408_1 的 base_xyz_dq_l2 拟合，适用前提是已采用“arm1 增大对应 -y”的几何约定。 -->
+        <param name="arm_base_offset_x_m" value="0.024759" />
+        <param name="arm_base_offset_y_m" value="0.006501" />
+        <param name="arm_base_offset_z_m" value="-0.005065" />
 
         <!-- 主段圆弧参数：theta 在 [-10, 45] 度间往返变化，驱动 UAV 在 x-z 平面运动 -->
         <param name="theta_min_deg" value="-10.0" />
@@ -73,8 +73,8 @@
         <param name="use_online_joint_calibration" value="true" />
         <param name="online_calibration_samples" value="20" />
         <param name="calibration_max_offset_deg" value="20.0" />
-        <param name="arm1_zero_offset_deg" value="-6.233935" />
-        <param name="arm2_zero_offset_deg" value="-20.000000" />
+        <param name="arm1_zero_offset_deg" value="-7.011313" />
+        <param name="arm2_zero_offset_deg" value="-5.434880" />
 
         <!-- 动捕与 IK 保护参数 -->
         <param name="pose_timeout_sec" value="0.3" />
