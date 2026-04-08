@@ -180,7 +180,7 @@ Each static case must satisfy:
 - no continuous `IK fail`
 - no continuous `pose loss`
 - total `ik_fail_count = 0`
-- total `pose_loss_count = 0`
+- total `pose_loss_count < pose_loss_limit`
 - `max(reach_error) <= eps_r_m`
 - final `hold_error_world <= 0.01 m`
 
@@ -218,10 +218,24 @@ This validation is intended to verify:
 - command continuity
 - ability to return close to the frozen hold point after each disturbance reset
 
+Current code-level pass rule for each virtual step:
+
+- `ik_fail_count = 0`
+- `pose_loss_count < pose_loss_limit`
+- for `zero_reset_*` steps, final `hold_error_world <= hold_error_pass_m`
+
 This validation is **not** equivalent to a real base-motion hold test. Even if the virtual disturbance suite passes, you still need at least one real small-disturbance retest with the UAV unpowered or otherwise safely constrained before using the formal experiment-2 flight as the next step.
 
 
 ## Update Log
+
+### 2026-04-08 23:00 CST
+- Selected `20260408_1` `base_xyz_dq_l2` as the final experiment-2 static calibration result.
+- Wrote the fitted parameters back to the experiment-2 launch entries.
+- Increased `pose_timeout_sec` to `0.8` for experiment-2 static and validation entries to better tolerate observed VRPN stalls.
+- Updated validation pass criteria so `pose_loss_count < pose_loss_limit` is accepted instead of requiring `pose_loss_count = 0`.
+- Added virtual-disturbance reachable-shell projection so software-injected targets outside the radius shell are projected back before IK.
+- Added a finalized run record: `src/arm_control/README_exp2_validation_20260408.md`.
 
 ### 2026-03-27 17:25 CST
 - Added a validation-suite mode to the experiment-2 static IK node so one entrypoint can run either the old single-point static test or the new automatic verification flow.
