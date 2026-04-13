@@ -556,11 +556,32 @@ int main(int argc, char *argv[]) {
     current_angle.arm1_angle = 0.0;
     current_angle.arm2_angle = 0.0;
     current_angle.hand_angle = 0.0;
+    const ros::Duration return_home_publish_time(1.0);
     double last_valid_arm1_deg = 0.0;
     double last_valid_arm2_deg = 0.0;
     const Vec3 arm_base_offset_body_m{arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m};
     ros::Time start_time = ros::Time::now();
     ros::Time last_log_time = start_time - ros::Duration(1.0);
+
+    // static_ik / validation 都是测试节点，结束前统一发一小段零位，避免机械臂停在中间测试姿态。
+    auto PublishReturnHome = [&](double home_arm1_deg, double home_arm2_deg, double home_hand_deg) {
+        if (!ros::ok()) {
+            return;
+        }
+        uam_message::arm_angle home_angle;
+        home_angle.arm1_angle = Clamp(home_arm1_deg, arm1_min, arm1_max);
+        home_angle.arm2_angle = Clamp(home_arm2_deg, arm2_min, arm2_max);
+        home_angle.hand_angle = Clamp(home_hand_deg, hand_min, hand_max);
+        ROS_INFO("exp2 static IK return arm to home: arm_d=(%.2f, %.2f, %.2f)",
+                 home_angle.arm1_angle, home_angle.arm2_angle, home_angle.hand_angle);
+        ros::Rate return_rate(30.0);
+        const ros::Time return_start = ros::Time::now();
+        while (ros::ok() && (ros::Time::now() - return_start) < return_home_publish_time) {
+            joint_angle_pub.publish(home_angle);
+            ros::spinOnce();
+            return_rate.sleep();
+        }
+    };
 
     // single_static: 保留原有单次静态 IK 行为。
     bool hold_initialized = false;
@@ -750,6 +771,7 @@ int main(int argc, char *argv[]) {
                                   pose_loss_count, pose_loss_limit);
                 if (pose_loss_count >= pose_loss_limit) {
                     ROS_ERROR("exp2 static IK lost required feedback continuously, aborting test");
+                    PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
                     return 1;
                 }
             } else {
@@ -762,6 +784,7 @@ int main(int argc, char *argv[]) {
                                       result.radius, l2_m, result.radius_minus_l2, result.reach_error);
                     if (ik_fail_count >= ik_fail_limit) {
                         ROS_ERROR("exp2 static IK failed continuously, aborting test");
+                        PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
                         return 1;
                     }
                 } else {
@@ -786,6 +809,7 @@ int main(int argc, char *argv[]) {
             }
             if ((now - test_start).toSec() >= test_duration_sec) {
                 ROS_INFO("exp2 static IK test finished successfully after %.2f s", test_duration_sec);
+                PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
                 return 0;
             }
             rate.sleep();
@@ -838,6 +862,7 @@ int main(int argc, char *argv[]) {
                           g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg);
                 ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
                           static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+                PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
                 return 1;
             }
             rate.sleep();
@@ -905,6 +930,7 @@ int main(int argc, char *argv[]) {
                           metrics.ik_fail_events, metrics.pose_loss_events);
                 ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
                           static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+                PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
                 return 1;
             }
 
@@ -923,6 +949,7 @@ int main(int argc, char *argv[]) {
                 if (!passed) {
                     ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
                               static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+                    PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
                     return 1;
                 }
                 ++static_cases_passed;
@@ -968,6 +995,7 @@ int main(int argc, char *argv[]) {
                           metrics.max_hold_error, metrics.final_hold_error, metrics.max_reach_error);
                 ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
                           static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+                PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
                 return 1;
             }
 
@@ -982,6 +1010,7 @@ int main(int argc, char *argv[]) {
                 if (!passed) {
                     ROS_ERROR("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=false",
                               static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+                    PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
                     return 1;
                 }
                 ++active_step_index;
@@ -1000,10 +1029,12 @@ int main(int argc, char *argv[]) {
         if (suite_phase == SuitePhase::kDone) {
             ROS_INFO("exp2 validation suite summary: static_cases_passed=%zu/%zu, virtual_disturbance_passed=%s, overall_pass=true",
                      static_cases_passed, static_cases.size(), virtual_disturbance_passed ? "true" : "false");
+            PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
             return 0;
         }
 
         rate.sleep();
     }
+    PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
     return 0;
 }

@@ -174,11 +174,32 @@ int main(int argc, char *argv[]) {
     current_angle.hand_angle = hand_hold_deg;
 
     const ros::Duration landing_publish_time(0.5);
+    const ros::Duration return_home_publish_time(1.0);
     const double two_pi = 2.0 * std::acos(-1.0);
     const double arm1_phase_rad = DegToRad(arm1_phase_deg);
     const double arm2_phase_rad = DegToRad(arm2_phase_deg);
     const ros::Time experiment_start = ros::Time::now();
     ros::Time last_log_time = experiment_start - ros::Duration(1.0);
+
+    // 节点退出前补一小段回原位发布，避免机械臂停在实验中间姿态就直接结束进程。
+    auto PublishReturnHome = [&](double home_arm1_deg, double home_arm2_deg, double home_hand_deg) {
+        if (!ros::ok()) {
+            return;
+        }
+        uam_message::arm_angle home_angle;
+        home_angle.arm1_angle = Clamp(home_arm1_deg, arm1_min, arm1_max);
+        home_angle.arm2_angle = Clamp(home_arm2_deg, arm2_min, arm2_max);
+        home_angle.hand_angle = Clamp(home_hand_deg, hand_min, hand_max);
+        ROS_INFO("uam_desired return arm to home: arm_d=(%.2f, %.2f, %.2f)",
+                 home_angle.arm1_angle, home_angle.arm2_angle, home_angle.hand_angle);
+        ros::Rate return_rate(30.0);
+        const ros::Time return_start = ros::Time::now();
+        while (ros::ok() && (ros::Time::now() - return_start) < return_home_publish_time) {
+            joint_angle_pub.publish(home_angle);
+            ros::spinOnce();
+            return_rate.sleep();
+        }
+    };
 
     while (ros::ok()) {
         ros::spinOnce();
@@ -251,6 +272,7 @@ int main(int argc, char *argv[]) {
         rate.sleep();
     }
 
+    PublishReturnHome(0.0, 0.0, hand_hold_deg);
     std::cout << "结束飞行！！！" << std::endl;
     return 0;
 }

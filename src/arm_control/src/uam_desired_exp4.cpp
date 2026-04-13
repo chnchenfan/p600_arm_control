@@ -552,6 +552,26 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    const ros::Duration return_home_publish_time(1.0);
+    auto PublishReturnHome = [&](double home_arm1_deg, double home_arm2_deg, double home_hand_deg) {
+        if (!ros::ok()) {
+            return;
+        }
+        uam_message::arm_angle home_angle;
+        home_angle.arm1_angle = Clamp(home_arm1_deg, arm1_min, arm1_max);
+        home_angle.arm2_angle = Clamp(home_arm2_deg, arm2_min, arm2_max);
+        home_angle.hand_angle = Clamp(home_hand_deg, hand_min, hand_max);
+        ROS_INFO("exp4 return arm to home: arm_d=(%.2f, %.2f, %.2f)",
+                 home_angle.arm1_angle, home_angle.arm2_angle, home_angle.hand_angle);
+        ros::Rate return_rate(30.0);
+        const ros::Time return_start = ros::Time::now();
+        while (ros::ok() && (ros::Time::now() - return_start) < return_home_publish_time) {
+            joint_angle_pub.publish(home_angle);
+            ros::spinOnce();
+            return_rate.sleep();
+        }
+    };
+
     const double hover_yaw_rad = DegToRad(hover_yaw_deg);
     const Vec3 nominal_ee_body{ee_nominal_x, ee_nominal_y, ee_nominal_z};
     const Vec3 nominal_ee_world = RotateYawOnly(nominal_ee_body, hover_yaw_rad);
@@ -878,6 +898,7 @@ int main(int argc, char *argv[]) {
         rate.sleep();
     }
 
+    PublishReturnHome(0.0, 0.0, hand_hold_deg);
     std::cout << "exp4 finished" << std::endl;
     return 0;
 }

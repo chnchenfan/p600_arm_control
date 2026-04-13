@@ -51,6 +51,26 @@ struct ArmState {
     double hand_deg = 0.0;
 };
 
+// 实验二的飞行保护不再只靠“切 recovery”这一条路径。
+// 这里额外区分：
+// - normal        : 正常执行实验轨迹
+// - safety_hold   : 进入安全悬停，停止推进主段参考
+// - safety_landing: 安全悬停后异常仍持续，开始任务层降落
+enum class ProtectionState {
+    kNormal = 0,
+    kSafetyHold = 1,
+    kSafetyLanding = 2,
+};
+
+// “位置冻结/无响应保护”需要一个时间窗口：
+// 若窗口内位置几乎没动，但目标误差始终存在，
+// 则说明当前不是普通的慢速跟踪，而更像是“动捕卡死在最后一帧”。
+struct FreezeWindowState {
+    bool initialized = false;
+    ros::Time stamp;
+    Vec3 position{0.0, 0.0, 0.0};
+};
+
 PoseState g_base_pose;
 PoseState g_ee_pose;
 PoseState g_local_pose;
@@ -241,6 +261,67 @@ bool IsPoseFresh(const PoseState &pose, const ros::Time &now, double timeout_sec
     return (now - pose.stamp).toSec() <= timeout_sec;
 }
 
+bool IsJumpAcceptable(const Vec3 &candidate,
+                     bool has_reference,
+                     const Vec3 &reference,
+                     double jump_threshold_m) {
+    if (!has_reference || jump_threshold_m <= 0.0) {
+        return true;
+    }
+    return NormVec3(SubVec3(candidate, reference)) <= jump_threshold_m;
+}
+
+const char *ProtectionStateName(ProtectionState state) {
+    switch (state) {
+        case ProtectionState::kNormal:
+            return "normal";
+        case ProtectionState::kSafetyHold:
+            return "safety_hold";
+        case ProtectionState::kSafetyLanding:
+            return "safety_landing";
+        default:
+            return "unknown";
+    }
+}
+
+Vec3 SelectSafeHoverWorld(bool hover_anchor_initialized,
+                          const Vec3 &hover_anchor_world,
+                          bool last_safe_world_initialized,
+                          const Vec3 &last_safe_world_command,
+                          const Vec3 &last_uav_world_command) {
+    // safe_hover 的优先级：
+    // 1. 已冻结的 hover anchor
+    // 2. 最后一次通过安全判定的世界系 UAV 参考
+    // 3. 最后一帧世界系 UAV 参考
+    // 这样做的原因是：一旦动捕异常，不应继续追逐当前圆弧中途点，
+    // 也不能回退到 (0,0,0)，而是应尽量回到已经验证过的安全悬停点。
+    if (hover_anchor_initialized) {
+        return hover_anchor_world;
+    }
+    if (last_safe_world_initialized) {
+        return last_safe_world_command;
+    }
+    return last_uav_world_command;
+}
+
+Vec3 SelectFallbackOutputPosition(bool last_safe_output_initialized,
+                                  const Vec3 &last_safe_output_position,
+                                  bool local_pose_valid,
+                                  const PoseState &local_pose,
+                                  const Vec3 &fallback_output_position) {
+    // fresh 丢失时不允许发 (0,0,0)。
+    // 优先保持最后一个“通过安全判定”的输出位置；
+    // 若连这个都没有，则退回当前 local pose；
+    // 再不行才使用调用方给出的保底位置。
+    if (last_safe_output_initialized) {
+        return last_safe_output_position;
+    }
+    if (local_pose_valid) {
+        return local_pose.position;
+    }
+    return fallback_output_position;
+}
+
 // 2DoF 机械臂逆解。
 //
 // 几何模型：
@@ -320,6 +401,10 @@ const char *StageName(int stage) {
             return "recovery";
         case 3:
             return "landing";
+        case 4:
+            return "safety_hold";
+        case 5:
+            return "safety_landing";
         default:
             return "unknown";
     }
@@ -452,6 +537,21 @@ int main(int argc, char *argv[]) {
     double arm_base_offset_x_m = 0.0;
     double arm_base_offset_y_m = 0.0;
     double arm_base_offset_z_m = 0.0;
+    // 两类保护共用参数：
+    // 1. freeze_* / z_freeze_*：位置冻结/无响应保护
+    // 2. uav_cmd_jump_threshold_m / uav_safe_z_max_m：安全有效指令筛选
+    // 3. safety_arm1_deg / safety_arm2_deg：进入 safety_hold / safety_landing 后的机械臂安全姿态
+    double freeze_window_sec = 1.0;          // 冻结检测时间窗长度；窗内位置几乎不动且误差持续存在，则判定为“卡死”
+    double freeze_motion_threshold_m = 0.03; // 时间窗内总位移阈值；小于该值认为飞机“几乎没动”
+    double freeze_arrive_threshold_m = 0.15; // 只有未到目标点时才触发冻结保护；该值定义“还没到”的位置误差下限
+    int freeze_trigger_cycles = 2;           // 冻结故障连续命中的次数阈值；达到后进入 safety_hold
+    int freeze_escalate_cycles = 6;          // 进入 safety_hold 后，异常继续持续的次数阈值；达到后升级为 safety_landing
+    double z_freeze_error_threshold_m = 0.20;  // 竖直冻结保护：z 方向误差阈值；用于“往天上冲/往地上压但高度不动”的场景
+    double z_freeze_motion_threshold_m = 0.03; // 竖直冻结保护：时间窗内 z 位移阈值；小于该值认为高度基本没变化
+    double uav_cmd_jump_threshold_m = 0.25;    // “安全有效指令”筛选中的单周期跳变量阈值；过大则不更新 last_safe_*
+    double uav_safe_z_max_m = 2.5;             // “安全有效指令”允许缓存的最高 z；超过该高度不再更新安全参考
+    double safety_arm1_deg = 0.0;              // 保护触发后 arm1 回到的安全角度
+    double safety_arm2_deg = 0.0;              // 保护触发后 arm2 回到的安全角度
     std::string base_pose_topic = "/vrpn_client_node/arm_base/pose";
     std::string ee_pose_topic = "/vrpn_client_node/arm_target/pose";
     std::string local_pose_topic = "/mavros/local_position/pose";
@@ -498,6 +598,17 @@ int main(int argc, char *argv[]) {
     pnh.param("arm_base_offset_x_m", arm_base_offset_x_m, arm_base_offset_x_m);
     pnh.param("arm_base_offset_y_m", arm_base_offset_y_m, arm_base_offset_y_m);
     pnh.param("arm_base_offset_z_m", arm_base_offset_z_m, arm_base_offset_z_m);
+    pnh.param("freeze_window_sec", freeze_window_sec, freeze_window_sec);
+    pnh.param("freeze_motion_threshold_m", freeze_motion_threshold_m, freeze_motion_threshold_m);
+    pnh.param("freeze_arrive_threshold_m", freeze_arrive_threshold_m, freeze_arrive_threshold_m);
+    pnh.param("freeze_trigger_cycles", freeze_trigger_cycles, freeze_trigger_cycles);
+    pnh.param("freeze_escalate_cycles", freeze_escalate_cycles, freeze_escalate_cycles);
+    pnh.param("z_freeze_error_threshold_m", z_freeze_error_threshold_m, z_freeze_error_threshold_m);
+    pnh.param("z_freeze_motion_threshold_m", z_freeze_motion_threshold_m, z_freeze_motion_threshold_m);
+    pnh.param("uav_cmd_jump_threshold_m", uav_cmd_jump_threshold_m, uav_cmd_jump_threshold_m);
+    pnh.param("uav_safe_z_max_m", uav_safe_z_max_m, uav_safe_z_max_m);
+    pnh.param("safety_arm1_deg", safety_arm1_deg, safety_arm1_deg);
+    pnh.param("safety_arm2_deg", safety_arm2_deg, safety_arm2_deg);
     pnh.param("base_pose_topic", base_pose_topic, base_pose_topic);
     pnh.param("ee_pose_topic", ee_pose_topic, ee_pose_topic);
     pnh.param("local_pose_topic", local_pose_topic, local_pose_topic);
@@ -536,6 +647,33 @@ int main(int argc, char *argv[]) {
     if (pose_loss_limit < 1) {
         pose_loss_limit = 1;
     }
+    if (freeze_window_sec <= 0.0) {
+        freeze_window_sec = 1.0;
+    }
+    if (freeze_motion_threshold_m <= 0.0) {
+        freeze_motion_threshold_m = 0.03;
+    }
+    if (freeze_arrive_threshold_m <= 0.0) {
+        freeze_arrive_threshold_m = 0.15;
+    }
+    if (freeze_trigger_cycles < 1) {
+        freeze_trigger_cycles = 1;
+    }
+    if (freeze_escalate_cycles < 1) {
+        freeze_escalate_cycles = 1;
+    }
+    if (z_freeze_error_threshold_m <= 0.0) {
+        z_freeze_error_threshold_m = 0.20;
+    }
+    if (z_freeze_motion_threshold_m <= 0.0) {
+        z_freeze_motion_threshold_m = 0.03;
+    }
+    if (uav_cmd_jump_threshold_m <= 0.0) {
+        uav_cmd_jump_threshold_m = 0.25;
+    }
+    if (uav_safe_z_max_m <= 0.0) {
+        uav_safe_z_max_m = 2.5;
+    }
     if (hold_freeze_samples < 1.0) {
         hold_freeze_samples = 1.0;
     }
@@ -566,6 +704,8 @@ int main(int argc, char *argv[]) {
     nh.param("/arm/left_hand_joint/max", hand_max, hand_max);
     arm2_min = std::max(arm2_min, theta_min_deg);
     arm2_max = std::min(arm2_max, theta_max_deg);
+    safety_arm1_deg = Clamp(safety_arm1_deg, arm1_min, arm1_max);
+    safety_arm2_deg = Clamp(safety_arm2_deg, arm2_min, arm2_max);
 
     // 反馈输入：
     // - base_pose_sub: 实验二任务层几何主输入
@@ -581,12 +721,35 @@ int main(int argc, char *argv[]) {
 
     ROS_INFO("exp2 service ready, waiting for /wjl/start/uav_desired");
     ROS_INFO(
-        "exp2 params: base_topic=%s, ee_topic=%s, local_topic=%s, L1=%.3f, L2=%.3f, base_offset=[%.3f, %.3f, %.3f], theta=[%.1f, %.1f], T=%.2f, settle=%.2f, exp=%.2f, recovery=%.2f, startup_zero=%s, local_mapping=%s, online_calib=%s",
+        "exp2 params: base_topic=%s, ee_topic=%s, local_topic=%s, L1=%.3f, L2=%.3f, base_offset=[%.3f, %.3f, %.3f], theta=[%.1f, %.1f], T=%.2f, settle=%.2f, exp=%.2f, recovery=%.2f, startup_zero=%s, local_mapping=%s, online_calib=%s, freeze_window=%.2f, freeze_motion=%.3f, freeze_error=%.3f, safe_z_max=%.2f",
         base_pose_topic.c_str(), ee_pose_topic.c_str(), local_pose_topic.c_str(), l1_m, l2_m,
         arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m,
         theta_min_deg, theta_max_deg, theta_period_sec, settle_time, experiment_time, recovery_time,
         startup_zero_enabled ? "true" : "false",
-        use_local_pose_mapping ? "true" : "false", use_online_joint_calibration ? "true" : "false");
+        use_local_pose_mapping ? "true" : "false", use_online_joint_calibration ? "true" : "false",
+        freeze_window_sec, freeze_motion_threshold_m, freeze_arrive_threshold_m, uav_safe_z_max_m);
+
+    const ros::Duration return_home_publish_time(1.0);
+    // 这里把“回原位”统一定义为 arm1=0、arm2=0。
+    // 无论实验前的 startup_zero 如何设置，结束尾段都回到机械臂零位。
+    auto PublishReturnHome = [&](double home_arm1_deg, double home_arm2_deg, double home_hand_deg) {
+        if (!ros::ok()) {
+            return;
+        }
+        uam_message::arm_angle home_angle;
+        home_angle.arm1_angle = Clamp(home_arm1_deg, arm1_min, arm1_max);
+        home_angle.arm2_angle = Clamp(home_arm2_deg, arm2_min, arm2_max);
+        home_angle.hand_angle = Clamp(home_hand_deg, hand_min, hand_max);
+        ROS_INFO("exp2 return arm to home: arm_d=(%.2f, %.2f, %.2f)",
+                 home_angle.arm1_angle, home_angle.arm2_angle, home_angle.hand_angle);
+        ros::Rate return_rate(30.0);
+        const ros::Time return_start = ros::Time::now();
+        while (ros::ok() && (ros::Time::now() - return_start) < return_home_publish_time) {
+            joint_angle_pub.publish(home_angle);
+            ros::spinOnce();
+            return_rate.sleep();
+        }
+    };
 
     ros::Rate rate(30.0);
     int startup_phase = startup_zero_enabled ? (startup_motion_check_enabled ? 0 : 1) : 2;
@@ -647,6 +810,7 @@ int main(int argc, char *argv[]) {
                         ROS_ERROR("exp2 %s failed within %.2f s: target=(%.1f, %.1f), real=(%.2f, %.2f), error=(%.2f, %.2f)",
                                   active_label, startup_zero_timeout_sec, startup_zero_cmd.arm1_angle, startup_zero_cmd.arm2_angle,
                                   g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg, arm1_error, arm2_error);
+                        PublishReturnHome(0.0, 0.0, startup_zero_cmd.hand_angle);
                         return 1;
                     }
                 }
@@ -695,15 +859,29 @@ int main(int argc, char *argv[]) {
     Vec3 ee_hold_world{explicit_hold_x, explicit_hold_y, explicit_hold_z};// 世界系固定点 P_hold
     bool hover_anchor_initialized = false; // 圆弧轨迹起点设置标志位，true表示已设置，false表示未设置
     Vec3 hover_anchor_world{0.0, 0.0, 0.0};// 圆弧轨迹起点
+    bool last_safe_world_initialized = false;
+    Vec3 last_safe_uav_world_command{0.0, 0.0, 0.0};
+    bool last_safe_output_initialized = false;
+    Vec3 last_safe_output_position{0.0, 0.0, 0.0};
+    Vec3 safe_hover_world{0.0, 0.0, 0.0};
+    bool safe_hover_initialized = false;
     bool frame_mapping_initialized = false;
     Vec3 local_anchor{0.0, 0.0, 0.0};
     int ik_fail_count = 0;
     int pose_loss_count = 0;
+    int freeze_fault_count = 0;
+    int safety_escalate_count = 0;
     int last_stage = -1;
     bool force_recovery = false;
+    ProtectionState protection_state = ProtectionState::kNormal;
+    ProtectionState last_protection_state = ProtectionState::kNormal;
+    FreezeWindowState freeze_window_state;
+    ros::Time protection_state_start;
+    std::string protection_reason = "none";
     double last_valid_arm1_deg = current_angle.arm1_angle;
     double last_valid_arm2_deg = current_angle.arm2_angle;
     const Vec3 arm_base_offset_body_m{arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m};
+
     Vec3 last_uav_world_command = g_base_pose.valid ? GetCorrectedBaseWorldPosition(g_base_pose, arm_base_offset_body_m) : Vec3{0.0, 0.0, 0.0};
     Vec3 recovery_start_world = last_uav_world_command;
     double recovery_start_arm1_deg = last_valid_arm1_deg;
@@ -722,7 +900,14 @@ int main(int argc, char *argv[]) {
         const double elapsed = (now - experiment_start).toSec();// 现在的时间（映射到相较于实验启动时的起点时间）
         const double dt = 1.0 / 30.0;
         int stage = 0;
-        if (elapsed < settle_time) {
+        if (protection_state == ProtectionState::kSafetyHold) {
+            stage = 4;
+        } else if (protection_state == ProtectionState::kSafetyLanding) {
+            if (!protection_state_start.isZero() && (now - protection_state_start) > landing_publish_time) {
+                break;
+            }
+            stage = 5;
+        } else if (elapsed < settle_time) {
             stage = 0;
         } else if (!force_recovery && elapsed < settle_time + experiment_time) {
             stage = 1;
@@ -731,13 +916,12 @@ int main(int argc, char *argv[]) {
         } else if (elapsed < settle_time + experiment_time + recovery_time + landing_publish_time.toSec()) {
             stage = 3;
         } else {
-            // 降落段：
-            // 复用现有 UAV 侧收尾逻辑，只把 z_d 拉到 landing_z 并置 land_flag。
             break;
         }
 
         // 机械臂L2与L1之间的在线零位标定
-        if (stage >= 1 && use_online_joint_calibration && !joint_offset_initialized) {
+        if (protection_state == ProtectionState::kNormal && stage >= 1 &&
+            use_online_joint_calibration && !joint_offset_initialized) {
             // 若 settle 阶段尚未采满设定帧数，也在进入主段前用当前可用样本做一次收尾估计；
             // 若完全没有有效样本，则退回 launch 参数中的默认零位偏置。
             if (calibration_sample_count > 0) {
@@ -768,21 +952,60 @@ int main(int argc, char *argv[]) {
             }
             last_stage = stage;
         }
+        if (protection_state != last_protection_state) {
+            ROS_WARN("exp2 protection -> %s, reason=%s",
+                     ProtectionStateName(protection_state), protection_reason.c_str());
+            last_protection_state = protection_state;
+        }
 
         const bool base_fresh = IsPoseFresh(g_base_pose, now, pose_timeout_sec); // true = 数据新鲜，没有超时
         const bool ee_fresh = IsPoseFresh(g_ee_pose, now, pose_timeout_sec);
         const bool local_fresh = IsPoseFresh(g_local_pose, now, pose_timeout_sec);
+        const bool local_required = use_local_pose_mapping;
         const Vec3 base_world_position = GetCorrectedBaseWorldPosition(g_base_pose, arm_base_offset_body_m);
+
+        auto enter_safety_state = [&](ProtectionState next_state, const std::string &reason) {
+            if (protection_state == next_state) {
+                return;
+            }
+            protection_state = next_state;
+            protection_state_start = now;
+            protection_reason = reason;
+            safe_hover_world = SelectSafeHoverWorld(
+                hover_anchor_initialized, hover_anchor_world,
+                last_safe_world_initialized, last_safe_uav_world_command,
+                last_uav_world_command);
+            safe_hover_initialized = true;
+            if (next_state == ProtectionState::kSafetyHold) {
+                safety_escalate_count = 0;
+                force_recovery = false;
+            }
+        };
+
+        const Vec3 fallback_world = SelectSafeHoverWorld(
+            hover_anchor_initialized, hover_anchor_world,
+            last_safe_world_initialized, last_safe_uav_world_command,
+            last_uav_world_command);
+        const Vec3 fallback_output_world = MapWorldToOutputFrame(
+            fallback_world, use_local_pose_mapping, frame_mapping_initialized,
+            hover_anchor_world, local_anchor);
+        const Vec3 fallback_output_position = SelectFallbackOutputPosition(
+            last_safe_output_initialized, last_safe_output_position,
+            g_local_pose.valid, g_local_pose, fallback_output_world);
+
+        Vec3 current_output_position = fallback_output_position;
+        Vec3 current_world_reference = fallback_world;
+        bool safety_fault_persisted_this_cycle = false;
 
         if (stage == 0) {
             // 稳定段：
             // 1. 更新当前基座位置，作为尚未冻结前的初始参考
             // 2. 尽量使用关节实测作为初值，避免刚进入实验二就突跳
-            // 3. 若 base pose 已经可用，则先把当前基座位置发给 UAV 侧保持悬停
-            if (g_base_pose.valid) {// 如果接受到消息/消息存在，valid=true表示接受到新一帧的消息
-                last_uav_world_command = base_world_position;// 把修正后的真实基座位置记为最后/上一帧
+            // 3. 即使动捕暂时不新鲜，也不允许发 (0,0,0)，而是保持最后一个安全输出
+            if (g_base_pose.valid) {
+                last_uav_world_command = base_world_position;
             }
-            if (g_real_arm_state.valid) {// 角度限幅与存储
+            if (g_real_arm_state.valid) {
                 last_valid_arm1_deg = Clamp(g_real_arm_state.arm1_deg, arm1_min, arm1_max);
                 last_valid_arm2_deg = Clamp(g_real_arm_state.arm2_deg, arm2_min, arm2_max);
                 current_angle.hand_angle = Clamp(g_real_arm_state.hand_deg, hand_min, hand_max);
@@ -799,10 +1022,12 @@ int main(int argc, char *argv[]) {
                 const Vec3 ee_body = RotateWorldToBody(ee_offset_world, g_base_pose);// PE_B = RB_W(PE_W - PB_W)
                 const Vec3 p_rel_meas = SubVec3(ee_body, Vec3{0.0, 0.0, -l1_m});// PE_S = PE_B - PS_B
                 const double radius = NormVec3(p_rel_meas);// 求解PE_S模长
-                // 求得PE_S与l2的误差。用于标定检查，如果差太多，说明这帧数据不适合用于标定，可能有：动捕误差、姿态跳变、末端标记不稳等问题
+                // 求得PE_S与l2的误差。用于标定检查，如果差太多，说明这帧数据不适合用于标定，
+                // 可能有：动捕误差、姿态跳变、末端标记不稳等问题
                 const double reach_error = std::fabs(radius - l2_m);
                 // 计算偏置
-                const double horizontal_radius = std::sqrt(p_rel_meas.x * p_rel_meas.x + p_rel_meas.y * p_rel_meas.y);// 水平投影半径：r = sqrt(Px^2 + Py^2)
+                const double horizontal_radius =
+                    std::sqrt(p_rel_meas.x * p_rel_meas.x + p_rel_meas.y * p_rel_meas.y);// 水平投影半径：r = sqrt(Px^2 + Py^2)
                 if (radius >= 1e-9 && reach_error <= eps_r_m && horizontal_radius >= eps_xy_m) {
                     const double q1_true_deg = RadToDeg(std::atan2(-p_rel_meas.y, p_rel_meas.x)); // 按实测约定计算真实的q1：arm1 增大时末端朝 -y
                     const double q2_true_deg = RadToDeg(std::atan2(p_rel_meas.z, horizontal_radius)); // 计算真实的q2
@@ -834,21 +1059,23 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            // 给UAV发悬停参考
-            if (base_fresh) {
-                uav_pos_d.land_flag = false;// 降落标志位，设置为不降落
-                const Vec3 output_position = // 保持当前悬停位置
-                    MapWorldToOutputFrame(base_world_position, use_local_pose_mapping, frame_mapping_initialized,
-                                          hover_anchor_world, local_anchor);
-                uav_pos_d.x_d = output_position.x;
-                uav_pos_d.y_d = output_position.y;
-                uav_pos_d.z_d = output_position.z;
-            } else { // 如果数据不新鲜，就发(0,0,0)
-                uav_pos_d.x_d = 0.0;
-                uav_pos_d.y_d = 0.0;
-                uav_pos_d.z_d = 0.0;
+            const Vec3 output_position = base_fresh ?
+                MapWorldToOutputFrame(base_world_position, use_local_pose_mapping, frame_mapping_initialized,
+                                      hover_anchor_world, local_anchor) :
+                fallback_output_position;
+            current_output_position = output_position;
+            current_world_reference = base_fresh ? base_world_position : fallback_world;
+            uav_pos_d.land_flag = false;
+            uav_pos_d.x_d = output_position.x;
+            uav_pos_d.y_d = output_position.y;
+            uav_pos_d.z_d = output_position.z;
+            uav_pos_d.yaw_d = hover_yaw_deg;
+
+            if ((!base_fresh || (local_required && !local_fresh)) && ++pose_loss_count >= pose_loss_limit) {
+                enter_safety_state(ProtectionState::kSafetyHold, "mocap freshness lost in settle");
+            } else if (base_fresh && (!local_required || local_fresh)) {
+                pose_loss_count = 0;
             }
-            uav_pos_d.yaw_d = hover_yaw_deg;// 保持当前yaw值
         } else if (stage == 1) {
             // 主段是实验二核心：
             // 1. 冻结 hover_anchor 和世界系固定点 P_hold
@@ -857,47 +1084,10 @@ int main(int argc, char *argv[]) {
             // 4. 用末端实测误差做位置外环修正
             // 5. 对修正后的目标点做 2DoF IK，得到 arm1/arm2 命令
             if (!ee_hold_initialized) {
-                if (!base_fresh || !ee_fresh) {// 如果数据不新鲜，就不能冻结固定点，继续保持上一帧期望为止，等待数据稳定
-                    current_angle.arm1_angle = last_valid_arm1_deg;
-                    current_angle.arm2_angle = last_valid_arm2_deg;
-                    uav_pos_d.land_flag = false;
-                    uav_pos_d.x_d = last_uav_world_command.x;
-                    uav_pos_d.y_d = last_uav_world_command.y;
-                    uav_pos_d.z_d = last_uav_world_command.z;
-                    uav_pos_d.yaw_d = hover_yaw_deg;
+                if (!base_fresh || !ee_fresh) {
                     ROS_WARN_THROTTLE(1.0, "exp2 waiting for fresh arm_base/arm_target before freezing hold point");
-                    joint_angle_pub.publish(current_angle);
-                    uav_pos_d_pub.publish(uav_pos_d);
-                    rate.sleep();
-                    continue;
-                }
-
-                if (use_initial_ee_hold) {
-                    // 默认模式：
-                    // 在主段刚开始时用 arm_target 的若干帧均值冻结末端固定点，
-                    // 这样不需要手工提前给一个世界坐标。
+                } else {
                     if (!hover_anchor_initialized) {
-                        hover_anchor_world = base_world_position;// 把修正后的真实基座位置记为圆弧轨迹起点
-                        hover_anchor_initialized = true;
-                    }
-                    if (use_local_pose_mapping && local_fresh && !frame_mapping_initialized) {
-                        local_anchor = g_local_pose.position;
-                        frame_mapping_initialized = true;
-                    }
-                    // 把当前末端世界坐标累加起来，准备取均值
-                    hold_accumulator = AddVec3(hold_accumulator, g_ee_pose.position);
-                    ++hold_sample_count;
-                    // 当采样帧数达到设定值后，用均值作为固定点
-                    if (hold_sample_count >= static_cast<int>(hold_freeze_samples)) {
-                        ee_hold_world = ScaleVec3(hold_accumulator, 1.0 / static_cast<double>(hold_sample_count));
-                        ee_hold_initialized = true;
-                        ROS_INFO("exp2 hold point frozen from arm_target: (%.3f, %.3f, %.3f)",
-                                 ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);// 打印世界系固定点的三维坐标
-                    }
-                } else {// 如果不用自动冻结，就读取参数，手工给定固定点
-                    ee_hold_initialized = true;
-                    ee_hold_world = {explicit_hold_x, explicit_hold_y, explicit_hold_z};
-                    if (!hover_anchor_initialized && base_fresh) {
                         hover_anchor_world = base_world_position;
                         hover_anchor_initialized = true;
                     }
@@ -905,12 +1095,17 @@ int main(int argc, char *argv[]) {
                         local_anchor = g_local_pose.position;
                         frame_mapping_initialized = true;
                     }
-                    ROS_INFO("exp2 hold point initialized from params: (%.3f, %.3f, %.3f)",
-                             ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);
+                    hold_accumulator = AddVec3(hold_accumulator, g_ee_pose.position);
+                    ++hold_sample_count;
+                    if (hold_sample_count >= static_cast<int>(hold_freeze_samples)) {
+                        ee_hold_world = ScaleVec3(hold_accumulator, 1.0 / static_cast<double>(hold_sample_count));
+                        ee_hold_initialized = true;
+                        ROS_INFO("exp2 hold point frozen from arm_target: (%.3f, %.3f, %.3f)",
+                                 ee_hold_world.x, ee_hold_world.y, ee_hold_world.z);
+                    }
                 }
             }
 
-            // 保护机制，如果前面冻结失败，这里再冻结一次
             if (!hover_anchor_initialized && base_fresh) {
                 hover_anchor_world = base_world_position;
                 hover_anchor_initialized = true;
@@ -923,78 +1118,82 @@ int main(int argc, char *argv[]) {
                          local_anchor.x, local_anchor.y, local_anchor.z);
             }
 
-            // UAV 参考轨迹仍沿用二维几何思想：
-            // x_d = x0 + L2 * (1 - cos(theta_d))
-            // z_d = z0 - L2 * sin(theta_d)
-            // 这里 y_d 固定为 hover_anchor.y。
-            const double stage_time = elapsed - settle_time;// 主段的运行时间
-            const double theta_deg = theta_mid_deg + theta_amp_deg * // 生成theta_d(t)，为正弦函数
-                std::sin(theta_phase_offset + two_pi * stage_time / theta_period_sec);
-            const double theta_rad = DegToRad(theta_deg);// 转为弧度制
-            // 保护机制，如果主段参考轨迹设置了圆弧位置起点，则采用设置的；如果没有，则采用现在的
-            Vec3 desired_world = hover_anchor_initialized ? hover_anchor_world : base_world_position;
-            desired_world.x = desired_world.x + l2_m * (1.0 - std::cos(theta_rad));// x_d = x0 + L2 (1 - cos theta)
-            desired_world.y = hover_anchor_initialized ? hover_anchor_world.y : desired_world.y;// y_d = y0
-            desired_world.z = desired_world.z - l2_m * std::sin(theta_rad); // z_d = z0 - L2 sin theta
-            last_uav_world_command = desired_world;// 保存当前世界系下的 UAV 参考位置
-            const Vec3 output_position = // 如果需要，就把动捕世界系下的参考位置映射到 PX4 local 系。
-                MapWorldToOutputFrame(desired_world, use_local_pose_mapping, frame_mapping_initialized,
-                                      hover_anchor_world, local_anchor);
-            uav_pos_d.land_flag = false;
-            uav_pos_d.x_d = output_position.x;
-            uav_pos_d.y_d = output_position.y;
-            uav_pos_d.z_d = output_position.z;
-            uav_pos_d.yaw_d = hover_yaw_deg;
-
-            // 机械臂段
-            if (!ee_hold_initialized || !hover_anchor_initialized || !base_fresh || !ee_fresh) {// 如果不符合要求，就保持上一帧
+            const bool hold_ready = ee_hold_initialized && hover_anchor_initialized;
+            const bool freshness_fault = !base_fresh || !ee_fresh || (local_required && !local_fresh);
+            if (freshness_fault) {
                 ++pose_loss_count;
-                current_angle.arm1_angle = last_valid_arm1_deg;
-                current_angle.arm2_angle = last_valid_arm2_deg;
-                ROS_WARN_THROTTLE(1.0,
-                                  "exp2 waiting for fresh data, base_fresh=%s, ee_fresh=%s, hold_ready=%s (%d/%d)",
-                                  base_fresh ? "true" : "false", ee_fresh ? "true" : "false",
-                                  ee_hold_initialized ? "true" : "false", pose_loss_count, pose_loss_limit);
-                if (pose_loss_count >= pose_loss_limit) {
-                    force_recovery = true;
-                    ROS_ERROR("exp2 mocap data lost continuously, switching to recovery");
-                }
             } else {
                 pose_loss_count = 0;
+            }
 
-                const Vec3 hold_offset_world = SubVec3(ee_hold_world, base_world_position);// PE_W - PB_W
-                Vec3 p_hold_body = RotateWorldToBody(hold_offset_world, g_base_pose);// PE_B = RB_W(PE_W - PB_W)
-                Vec3 p_rel = SubVec3(p_hold_body, Vec3{0.0, 0.0, -l1_m});// PE_S = PE_B - PS_B
+            if (!hold_ready || freshness_fault) {
+                // 第一类保护：动捕/位姿数据丢失保护。
+                // 一旦主段关键输入不新鲜，不再继续推进圆弧轨迹，
+                // 否则在“刚体卡在最后一帧”时，飞控会以为自己一直没到点，持续往错误方向推。
+                current_output_position = fallback_output_position;
+                current_world_reference = fallback_world;
+                uav_pos_d.land_flag = false;
+                uav_pos_d.x_d = current_output_position.x;
+                uav_pos_d.y_d = current_output_position.y;
+                uav_pos_d.z_d = current_output_position.z;
+                uav_pos_d.yaw_d = hover_yaw_deg;
 
-                // 末端位置外环：
-                // 注意这里是“先改目标点，再做 IK”，
-                // 而不是直接对关节角做 P 控制。
-                const Vec3 ee_error_world = SubVec3(ee_hold_world, g_ee_pose.position);// e_W = PE_W - PEd_W
-                const Vec3 ee_error_body = RotateWorldToBody(ee_error_world, g_base_pose);// e_B = R_BW * e_W
-                const Vec3 correction_body = ClampVec3Norm(ScaleVec3(ee_error_body, ee_outer_kp), ee_outer_clip_m); //clamp(Kp * e_B, clip)
-                const Vec3 p_rel_corrected = AddVec3(p_rel, correction_body);// p_rel_corrected = PE_S + clamp(Kp * e_B, clip)
+                const double max_arm1_delta = arm1_dot_max_deg_s * dt;
+                const double max_arm2_delta = arm2_dot_max_deg_s * dt;
+                current_angle.arm1_angle = RateLimit(safety_arm1_deg, last_valid_arm1_deg, max_arm1_delta);
+                current_angle.arm2_angle = RateLimit(safety_arm2_deg, last_valid_arm2_deg, max_arm2_delta);
+                last_valid_arm1_deg = current_angle.arm1_angle;
+                last_valid_arm2_deg = current_angle.arm2_angle;
 
-                double solved_arm1_deg = last_valid_arm1_deg;// 逆解的输出，这里保存为上一帧，如果后续计算出来就覆盖，计算失败则保持上一帧
+                if (freshness_fault) {
+                    ROS_WARN_THROTTLE(1.0,
+                                      "exp2 freshness fault: base_fresh=%s, ee_fresh=%s, local_fresh=%s, hold_ready=%s (%d/%d)",
+                                      base_fresh ? "true" : "false", ee_fresh ? "true" : "false",
+                                      local_fresh ? "true" : "false", hold_ready ? "true" : "false",
+                                      pose_loss_count, pose_loss_limit);
+                    if (pose_loss_count >= pose_loss_limit) {
+                        enter_safety_state(ProtectionState::kSafetyHold, "mocap freshness lost in arc_hold");
+                    }
+                }
+            } else {
+                const double stage_time = elapsed - settle_time;
+                const double theta_deg = theta_mid_deg + theta_amp_deg *
+                    std::sin(theta_phase_offset + two_pi * stage_time / theta_period_sec);
+                const double theta_rad = DegToRad(theta_deg);
+                Vec3 desired_world = hover_anchor_world;
+                desired_world.x = desired_world.x + l2_m * (1.0 - std::cos(theta_rad));
+                desired_world.y = hover_anchor_world.y;
+                desired_world.z = desired_world.z - l2_m * std::sin(theta_rad);
+                last_uav_world_command = desired_world;
+                current_world_reference = desired_world;
+                current_output_position = MapWorldToOutputFrame(
+                    desired_world, use_local_pose_mapping, frame_mapping_initialized,
+                    hover_anchor_world, local_anchor);
+                uav_pos_d.land_flag = false;
+                uav_pos_d.x_d = current_output_position.x;
+                uav_pos_d.y_d = current_output_position.y;
+                uav_pos_d.z_d = current_output_position.z;
+                uav_pos_d.yaw_d = hover_yaw_deg;
+
+                const Vec3 hold_offset_world = SubVec3(ee_hold_world, base_world_position);
+                Vec3 p_hold_body = RotateWorldToBody(hold_offset_world, g_base_pose);
+                Vec3 p_rel = SubVec3(p_hold_body, Vec3{0.0, 0.0, -l1_m});
+
+                const Vec3 ee_error_world = SubVec3(ee_hold_world, g_ee_pose.position);
+                const Vec3 ee_error_body = RotateWorldToBody(ee_error_world, g_base_pose);
+                const Vec3 correction_body =
+                    ClampVec3Norm(ScaleVec3(ee_error_body, ee_outer_kp), ee_outer_clip_m);
+                const Vec3 p_rel_corrected = AddVec3(p_rel, correction_body);
+
+                double solved_arm1_deg = last_valid_arm1_deg;
                 double solved_arm2_deg = last_valid_arm2_deg;
-                double reach_error = 0.0;// 误差
-                const bool solved = SolveInverseKinematics(p_rel_corrected, // 修正后的目标点
-                                                           l2_m,            // 第二连杆长度
-                                                           last_valid_arm1_deg,//上一帧角度，用于连续支选择
-                                                           last_valid_arm2_deg,
-                                                           calibrated_arm1_zero_offset_deg,//本次飞行在线标定出来的零位偏置
-                                                           calibrated_arm2_zero_offset_deg,
-                                                           arm1_min,//关节限位
-                                                           arm1_max,
-                                                           arm2_min,
-                                                           arm2_max,
-                                                           eps_r_m,//可达性和奇异点阈值
-                                                           eps_xy_m,
-                                                           &solved_arm1_deg,// 输出。角度和误差
-                                                           &solved_arm2_deg,
-                                                           &reach_error);
+                double reach_error = 0.0;
+                const bool solved = SolveInverseKinematics(
+                    p_rel_corrected, l2_m, last_valid_arm1_deg, last_valid_arm2_deg,
+                    calibrated_arm1_zero_offset_deg, calibrated_arm2_zero_offset_deg,
+                    arm1_min, arm1_max, arm2_min, arm2_max,
+                    eps_r_m, eps_xy_m, &solved_arm1_deg, &solved_arm2_deg, &reach_error);
                 if (!solved) {
-                    // IK 或可达性失败时，不立刻乱发新命令，
-                    // 而是保持上一帧有效解，并累积失败计数。
                     ++ik_fail_count;
                     current_angle.arm1_angle = last_valid_arm1_deg;
                     current_angle.arm2_angle = last_valid_arm2_deg;
@@ -1022,35 +1221,195 @@ int main(int argc, char *argv[]) {
             // 恢复段：
             // UAV 从主段结束位置平滑回到 hover_anchor，
             // 机械臂同步回到 0 度附近，便于后续 landing 或下一次重启实验。
-            const double ratio = recovery_time <= 1e-6 ? 1.0 : // 计算时间，进入恢复段多久了，并归一化到[0,1]
+            const double ratio = recovery_time <= 1e-6 ? 1.0 :
                 Clamp((elapsed - settle_time - experiment_time) / recovery_time, 0.0, 1.0);
             const Vec3 recovery_target_world = hover_anchor_initialized ? hover_anchor_world : recovery_start_world;
             const Vec3 desired_world = InterpolateVec3(recovery_start_world, recovery_target_world, ratio);
             last_uav_world_command = desired_world;
-            const Vec3 output_position =
-                MapWorldToOutputFrame(desired_world, use_local_pose_mapping, frame_mapping_initialized,
-                                      hover_anchor_world, local_anchor);
+            current_world_reference = desired_world;
+            current_output_position = MapWorldToOutputFrame(
+                desired_world, use_local_pose_mapping, frame_mapping_initialized,
+                hover_anchor_world, local_anchor);
             uav_pos_d.land_flag = false;
-            uav_pos_d.x_d = output_position.x;
-            uav_pos_d.y_d = output_position.y;
-            uav_pos_d.z_d = output_position.z;
+            uav_pos_d.x_d = current_output_position.x;
+            uav_pos_d.y_d = current_output_position.y;
+            uav_pos_d.z_d = current_output_position.z;
             uav_pos_d.yaw_d = hover_yaw_deg;
-            current_angle.arm1_angle = InterpolateVec3({recovery_start_arm1_deg, 0.0, 0.0}, {0.0, 0.0, 0.0}, ratio).x;
-            current_angle.arm2_angle = InterpolateVec3({recovery_start_arm2_deg, 0.0, 0.0}, {0.0, 0.0, 0.0}, ratio).x;
+            current_angle.arm1_angle = InterpolateVec3(
+                {recovery_start_arm1_deg, 0.0, 0.0}, {0.0, 0.0, 0.0}, ratio).x;
+            current_angle.arm2_angle = InterpolateVec3(
+                {recovery_start_arm2_deg, 0.0, 0.0}, {0.0, 0.0, 0.0}, ratio).x;
             last_valid_arm1_deg = current_angle.arm1_angle;
             last_valid_arm2_deg = current_angle.arm2_angle;
-        } else {
+
+            if ((!base_fresh || (local_required && !local_fresh)) && ++pose_loss_count >= pose_loss_limit) {
+                enter_safety_state(ProtectionState::kSafetyHold, "mocap freshness lost in recovery");
+            } else if (base_fresh && (!local_required || local_fresh)) {
+                pose_loss_count = 0;
+            }
+        } else if (stage == 3) {
             const Vec3 desired_world = hover_anchor_initialized ? hover_anchor_world : last_uav_world_command;
-            const Vec3 output_position =
-                MapWorldToOutputFrame(desired_world, use_local_pose_mapping, frame_mapping_initialized,
-                                      hover_anchor_world, local_anchor);
-            uav_pos_d.x_d = output_position.x;
-            uav_pos_d.y_d = output_position.y;
+            current_world_reference = desired_world;
+            current_output_position = MapWorldToOutputFrame(
+                desired_world, use_local_pose_mapping, frame_mapping_initialized,
+                hover_anchor_world, local_anchor);
+            uav_pos_d.x_d = current_output_position.x;
+            uav_pos_d.y_d = current_output_position.y;
             uav_pos_d.z_d = landing_z;
             uav_pos_d.yaw_d = hover_yaw_deg;
             uav_pos_d.land_flag = true;
             current_angle.arm1_angle = last_valid_arm1_deg;
             current_angle.arm2_angle = last_valid_arm2_deg;
+        } else {
+            // 保护动作语义统一：
+            // - safety_hold    : 保持 safe_hover，不再推进任何实验参考
+            // - safety_landing : 保持 safe_hover 的 x/y，再用 landing_z + land_flag 收尾
+            const Vec3 hold_world = safe_hover_initialized ? safe_hover_world : fallback_world;
+            const Vec3 hold_output_world = MapWorldToOutputFrame(
+                hold_world, use_local_pose_mapping, frame_mapping_initialized,
+                hover_anchor_world, local_anchor);
+            current_world_reference = hold_world;
+            current_output_position = SelectFallbackOutputPosition(
+                last_safe_output_initialized, last_safe_output_position,
+                g_local_pose.valid, g_local_pose, hold_output_world);
+            uav_pos_d.x_d = current_output_position.x;
+            uav_pos_d.y_d = current_output_position.y;
+            uav_pos_d.z_d = (stage == 5) ? landing_z : current_output_position.z;
+            uav_pos_d.yaw_d = hover_yaw_deg;
+            uav_pos_d.land_flag = (stage == 5);
+
+            const double max_arm1_delta = arm1_dot_max_deg_s * dt;
+            const double max_arm2_delta = arm2_dot_max_deg_s * dt;
+            current_angle.arm1_angle = RateLimit(safety_arm1_deg, last_valid_arm1_deg, max_arm1_delta);
+            current_angle.arm2_angle = RateLimit(safety_arm2_deg, last_valid_arm2_deg, max_arm2_delta);
+            last_valid_arm1_deg = current_angle.arm1_angle;
+            last_valid_arm2_deg = current_angle.arm2_angle;
+
+            if (stage == 4 && (!base_fresh || (local_required && !local_fresh))) {
+                safety_fault_persisted_this_cycle = true;
+            }
+        }
+
+        // “安全有效指令”的定义：
+        // 只有当当前参考通过 freshness、跳变和高度包线检查后，
+        // 才允许更新 last_safe_* 缓存。保护触发时保持的必须是这种“安全指令”，
+        // 不能简单取“上一帧发过的指令”，否则可能把坏数据也冻结下来。
+        const bool stage_requires_ee_fresh_for_safe = (stage == 1);
+        const bool command_is_safe =
+            protection_state == ProtectionState::kNormal &&
+            (stage == 0 || stage == 1 || stage == 2) &&
+            base_fresh &&
+            (!stage_requires_ee_fresh_for_safe || (ee_fresh && ee_hold_initialized && hover_anchor_initialized)) &&
+            (!local_required || local_fresh) &&
+            current_output_position.z <= uav_safe_z_max_m &&
+            IsJumpAcceptable(current_output_position, last_safe_output_initialized,
+                             last_safe_output_position, uav_cmd_jump_threshold_m);
+        if (command_is_safe) {
+            last_safe_world_initialized = true;
+            last_safe_uav_world_command = current_world_reference;
+            last_safe_output_initialized = true;
+            last_safe_output_position = current_output_position;
+            safe_hover_world = SelectSafeHoverWorld(
+                hover_anchor_initialized, hover_anchor_world,
+                last_safe_world_initialized, last_safe_uav_world_command,
+                last_uav_world_command);
+            safe_hover_initialized = true;
+        }
+
+        // 第二类保护：位置冻结/无响应保护。
+        // 故障模型是“刚体丢失后，系统持续发布最后一帧位置”。
+        // 这种情况下话题可能还在更新，freshness 也可能没超时，
+        // 但飞机的‘实际位置’在到点前长时间几乎不变，所以必须单独检测。
+        const bool freeze_detection_enabled = local_fresh && (stage == 0 || stage == 1 || stage == 2 || stage == 4);
+        if (freeze_detection_enabled) {
+            if (!freeze_window_state.initialized) {
+                freeze_window_state.initialized = true;
+                freeze_window_state.stamp = now;
+                freeze_window_state.position = g_local_pose.position;
+            } else if ((now - freeze_window_state.stamp).toSec() >= freeze_window_sec) {
+                const Vec3 measured_motion = SubVec3(g_local_pose.position, freeze_window_state.position);
+                const Vec3 output_error = SubVec3(
+                    Vec3{uav_pos_d.x_d, uav_pos_d.y_d, uav_pos_d.z_d},
+                    g_local_pose.position);
+                const double motion_norm = NormVec3(measured_motion);
+                const double pos_error_norm = NormVec3(output_error);
+                const double z_motion = std::fabs(g_local_pose.position.z - freeze_window_state.position.z);
+                const double z_error = std::fabs(uav_pos_d.z_d - g_local_pose.position.z);
+                const bool position_frozen =
+                    pos_error_norm > freeze_arrive_threshold_m && motion_norm < freeze_motion_threshold_m;
+                const bool vertical_frozen =
+                    z_error > z_freeze_error_threshold_m && z_motion < z_freeze_motion_threshold_m;
+                if (position_frozen || vertical_frozen) {
+                    ++freeze_fault_count;
+                    safety_fault_persisted_this_cycle = true;
+                    ROS_WARN_THROTTLE(1.0,
+                                      "exp2 freeze guard: pos_error=%.3f, motion=%.3f, z_error=%.3f, z_motion=%.3f (%d/%d)",
+                                      pos_error_norm, motion_norm, z_error, z_motion,
+                                      freeze_fault_count, freeze_trigger_cycles);
+                    if (protection_state == ProtectionState::kNormal &&
+                        freeze_fault_count >= freeze_trigger_cycles) {
+                        enter_safety_state(
+                            ProtectionState::kSafetyHold,
+                            vertical_frozen ? "vertical motion frozen before arrival" :
+                                              "uav position frozen before arrival");
+                    }
+                } else {
+                    freeze_fault_count = 0;
+                }
+                freeze_window_state.stamp = now;
+                freeze_window_state.position = g_local_pose.position;
+            }
+        } else {
+            freeze_window_state.initialized = false;
+            if (protection_state == ProtectionState::kNormal) {
+                freeze_fault_count = 0;
+            }
+        }
+
+        if (protection_state == ProtectionState::kSafetyHold) {
+            // safety_hold 不是最终动作，而是“先稳住再决定要不要落”。
+            // 若 freshness 丢失或位置冻结在安全悬停阶段仍持续存在，
+            // 说明故障不是瞬时抖动，就升级到 safety_landing。
+            if (safety_fault_persisted_this_cycle) {
+                ++safety_escalate_count;
+                if (safety_escalate_count >= freeze_escalate_cycles) {
+                    enter_safety_state(ProtectionState::kSafetyLanding, "fault persisted in safety_hold");
+                }
+            } else {
+                safety_escalate_count = 0;
+            }
+        }
+
+        // 若本周期刚进入 safety_landing，则立即覆盖掉前面生成的普通命令，
+        // 保证 land_flag 在同一个控制周期就生效。
+        if (protection_state == ProtectionState::kSafetyLanding && stage != 5) {
+            const Vec3 hold_world = safe_hover_initialized ? safe_hover_world : fallback_world;
+            const Vec3 hold_output_world = MapWorldToOutputFrame(
+                hold_world, use_local_pose_mapping, frame_mapping_initialized,
+                hover_anchor_world, local_anchor);
+            current_output_position = SelectFallbackOutputPosition(
+                last_safe_output_initialized, last_safe_output_position,
+                g_local_pose.valid, g_local_pose, hold_output_world);
+            uav_pos_d.x_d = current_output_position.x;
+            uav_pos_d.y_d = current_output_position.y;
+            uav_pos_d.z_d = landing_z;
+            uav_pos_d.yaw_d = hover_yaw_deg;
+            uav_pos_d.land_flag = true;
+            stage = 5;
+        } else if (protection_state == ProtectionState::kSafetyHold && stage != 4) {
+            const Vec3 hold_world = safe_hover_initialized ? safe_hover_world : fallback_world;
+            const Vec3 hold_output_world = MapWorldToOutputFrame(
+                hold_world, use_local_pose_mapping, frame_mapping_initialized,
+                hover_anchor_world, local_anchor);
+            current_output_position = SelectFallbackOutputPosition(
+                last_safe_output_initialized, last_safe_output_position,
+                g_local_pose.valid, g_local_pose, hold_output_world);
+            uav_pos_d.x_d = current_output_position.x;
+            uav_pos_d.y_d = current_output_position.y;
+            uav_pos_d.z_d = current_output_position.z;
+            uav_pos_d.yaw_d = hover_yaw_deg;
+            uav_pos_d.land_flag = false;
+            stage = 4;
         }
 
         current_angle.arm1_angle = Clamp(current_angle.arm1_angle, arm1_min, arm1_max);
@@ -1068,11 +1427,13 @@ int main(int argc, char *argv[]) {
             const double ee_error_norm =
                 (ee_hold_initialized && g_ee_pose.valid) ? NormVec3(SubVec3(ee_hold_world, g_ee_pose.position)) : -1.0;
             ROS_INFO(
-                "[%s] t=%.2f s, pose_d=(%.2f, %.2f, %.2f, %.2f), arm_d=(%.2f, %.2f, %.2f), base_fresh=%s, ee_fresh=%s, ee_err=%.4f, pose_loss=%d, ik_fail=%d, offset=(%.2f, %.2f), base_offset=(%.4f, %.4f, %.4f)",
-                StageName(stage), elapsed, uav_pos_d.x_d, uav_pos_d.y_d, uav_pos_d.z_d, uav_pos_d.yaw_d,
+                "[%s|%s] t=%.2f s, pose_d=(%.2f, %.2f, %.2f, %.2f), arm_d=(%.2f, %.2f, %.2f), base_fresh=%s, ee_fresh=%s, local_fresh=%s, ee_err=%.4f, pose_loss=%d, freeze_fault=%d, safety_escalate=%d, ik_fail=%d, offset=(%.2f, %.2f), base_offset=(%.4f, %.4f, %.4f)",
+                StageName(stage), ProtectionStateName(protection_state), elapsed,
+                uav_pos_d.x_d, uav_pos_d.y_d, uav_pos_d.z_d, uav_pos_d.yaw_d,
                 current_angle.arm1_angle, current_angle.arm2_angle, current_angle.hand_angle,
-                base_fresh ? "true" : "false", ee_fresh ? "true" : "false", ee_error_norm,
-                pose_loss_count, ik_fail_count, calibrated_arm1_zero_offset_deg, calibrated_arm2_zero_offset_deg,
+                base_fresh ? "true" : "false", ee_fresh ? "true" : "false", local_fresh ? "true" : "false",
+                ee_error_norm, pose_loss_count, freeze_fault_count, safety_escalate_count, ik_fail_count,
+                calibrated_arm1_zero_offset_deg, calibrated_arm2_zero_offset_deg,
                 arm_base_offset_x_m, arm_base_offset_y_m, arm_base_offset_z_m);
         }
 
@@ -1082,6 +1443,7 @@ int main(int argc, char *argv[]) {
         rate.sleep();
     }
 
+    PublishReturnHome(0.0, 0.0, current_angle.hand_angle);
     std::cout << "exp2 finished" << std::endl;
     return 0;
 }

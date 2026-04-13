@@ -174,6 +174,26 @@ int main(int argc, char **argv) {
     ros::Publisher arm_pub = nh.advertise<uam_message::arm_angle>("/wjl/arm/guidefly/angle_d", 10);
     ros::Publisher sample_index_pub = nh.advertise<std_msgs::Int32>("/wjl/calibration/sample_index", 10, true);
     ros::Subscriber arm_sub = nh.subscribe<uam_message::arm_angle>("/wjl/arm/real/angle_r", 10, ArmRealCb);
+    const ros::Duration return_home_publish_time(1.0);
+
+    auto PublishReturnHome = [&](double home_arm1_deg, double home_arm2_deg, double home_hand_deg) {
+        if (!ros::ok()) {
+            return;
+        }
+        uam_message::arm_angle home_cmd;
+        home_cmd.arm1_angle = home_arm1_deg;
+        home_cmd.arm2_angle = home_arm2_deg;
+        home_cmd.hand_angle = home_hand_deg;
+        ROS_INFO("static calibration return arm to home: arm_d=(%.2f, %.2f, %.2f)",
+                 home_cmd.arm1_angle, home_cmd.arm2_angle, home_cmd.hand_angle);
+        ros::Rate return_rate(publish_rate_hz);
+        const ros::Time return_start = ros::Time::now();
+        while (ros::ok() && (ros::Time::now() - return_start) < return_home_publish_time) {
+            arm_pub.publish(home_cmd);
+            ros::spinOnce();
+            return_rate.sleep();
+        }
+    };
 
     ROS_INFO("static calibration collector ready: %zu samples, hold=%.2f s, confirm=%.2f s, tol=%.2f deg, timeout=%.2f s",
              samples.size(), sample_hold_sec, settle_confirm_sec, angle_tolerance_deg, sample_timeout_sec);
@@ -292,6 +312,7 @@ int main(int argc, char **argv) {
                 ROS_ERROR("static calibration %s failed within %.2f s: target=(%.1f, %.1f), real=(%.2f, %.2f), error=(%.2f, %.2f)",
                           active_label, startup_zero_timeout_sec, active_target_arm1, active_target_arm2,
                           g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg, arm1_error, arm2_error);
+                PublishReturnHome(0.0, 0.0, hand_angle_deg);
                 return 1;
             }
             rate.sleep();
@@ -324,6 +345,7 @@ int main(int argc, char **argv) {
                           target_arm1, target_arm2,
                           g_real_arm_state.arm1_deg, g_real_arm_state.arm2_deg,
                           arm1_error, arm2_error);
+                PublishReturnHome(0.0, 0.0, hand_angle_deg);
                 return 1;
             }
         } else {
@@ -350,5 +372,6 @@ int main(int argc, char **argv) {
         rate.sleep();
     }
 
+    PublishReturnHome(0.0, 0.0, hand_angle_deg);
     return 0;
 }
