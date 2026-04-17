@@ -27,7 +27,7 @@
         <param name="landing_z" value="0.5" />
         <!-- =============================================targets目标和自身位置更新的新鲜度保护================================================ -->
         <!-- 超过这个时间没新鲜数据，就认为动捕不可靠 -->
-        <param name="target_pose_timeout_sec" value="0.3" />
+        <param name="target_pose_timeout_sec" value="0.8" />
         <!-- 连续多少次检测到 target/位姿超时后，才真正触发保护。 -->
         <param name="target_loss_limit" value="10" />
         <param name="base_step_limit_xy" value="0.03" />
