@@ -23,6 +23,7 @@ bool start_flag = false;
 // 从而保证飞机不会先冲到全局原点再开始走方形。
 struct BasePoseState {
     bool valid = false;
+    ros::Time stamp;
     double x = 0.0;
     double y = 0.0;
     double z = 0.0;
@@ -40,6 +41,14 @@ struct MavrosStateCache {
 
 MavrosStateCache g_mavros_state;
 
+struct FreezeWindowState {
+    bool initialized = false;
+    ros::Time stamp;
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+};
+
 // 通用限幅函数。
 // 一方面用于参数回退后的保护，另一方面用于最终关节命令限幅。
 double Clamp(double value, double min_value, double max_value) {
@@ -55,6 +64,16 @@ double Clamp(double value, double min_value, double max_value) {
 // 机械臂轨迹的外部参数用角度表达，三角函数内部统一转成弧度。
 double DegToRad(double value_deg) {
     return value_deg * std::acos(-1.0) / 180.0;
+}
+
+bool IsPoseFresh(const BasePoseState &pose, const ros::Time &now, double timeout_sec) {
+    if (!pose.valid) {
+        return false;
+    }
+    if (timeout_sec <= 0.0) {
+        return true;
+    }
+    return (now - pose.stamp).toSec() <= timeout_sec;
 }
 
 // 状态机阶段名，只用于日志输出。
@@ -94,6 +113,7 @@ bool doReq(uav::desired_start::Request &req, uav::desired_start::Response &resp)
 // 这里的数据源是 /mavros/local_position/pose，实验三用它来冻结正方形首角。
 void BasePoseCb(const geometry_msgs::PoseStamped::ConstPtr &msg) {
     g_base_pose.valid = true;
+    g_base_pose.stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
     g_base_pose.x = msg->pose.position.x;
     g_base_pose.y = msg->pose.position.y;
     g_base_pose.z = msg->pose.position.z;
@@ -106,6 +126,7 @@ void BasePoseCb(const geometry_msgs::PoseStamped::ConstPtr &msg) {
 // 一旦偏差持续超阈值，就中止正方形主段，先把机械臂收回。
 void VrpnPoseCb(const geometry_msgs::PoseStamped::ConstPtr &msg) {
     g_vrpn_pose.valid = true;
+    g_vrpn_pose.stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
     g_vrpn_pose.x = msg->pose.position.x;
     g_vrpn_pose.y = msg->pose.position.y;
     g_vrpn_pose.z = msg->pose.position.z;
@@ -142,7 +163,7 @@ int main(int argc, char *argv[]) {
     ros::Subscriber base_pose_sub =
         nh.subscribe<geometry_msgs::PoseStamped>("/mavros/local_position/pose", 10, BasePoseCb);
     ros::Subscriber vrpn_pose_sub =
-        nh.subscribe<geometry_msgs::PoseStamped>("/vrpn_client_node/Tracker0/pose", 10, VrpnPoseCb);
+        nh.subscribe<geometry_msgs::PoseStamped>("/vrpn_client_node/arm_base/pose", 10, VrpnPoseCb);
     ros::Subscriber mavros_state_sub =
         nh.subscribe<mavros_msgs::State>("/mavros/state", 10, MavrosStateCb);
 
@@ -181,6 +202,37 @@ int main(int argc, char *argv[]) {
     double max_altitude_drop = 0.3;
     int protection_trigger_cycles = 10;
     double protection_hold_time = 2.0;
+
+    // =============================================位置更新的新鲜度保护================================================
+    // 超过这个时间没新鲜数据，就认为 arm_base/local pose 不可靠。
+    double pose_timeout_sec = 0.3;
+    // 连续多少次检测到位姿超时后，才真正触发 protection/safety_hold。
+    int pose_loss_limit = 10;
+
+    // ==============================================数据回传丢失保护=================================================
+    // ======================================= 三维总数据（模长）回传丢失保护 ===================================
+    // 在这么长一段时间内，检查飞机实际位置有没有明显动。
+    double freeze_window_sec = 1.0;
+    // 在 freeze_window_sec 这个时间窗里，如果实际位置总位移小于这个值，就认为“几乎没动”。
+    double freeze_motion_threshold_m = 0.03;
+    // 只有当“当前还没到目标点”时，冻结保护才有意义。
+    double freeze_arrive_threshold_m = 0.15;
+    // 冻结故障连续命中多少次后，进入 safety_hold。
+    int freeze_trigger_cycles = 3;
+    // 进入 safety_hold 后，如果异常还持续，再连续多少次后升级到 safety_landing。
+    int freeze_escalate_cycles = 6;
+
+    // =========================================== 单Z轴数据回传丢失保护 ============================================
+    // 专门针对高度方向的冻结保护。如果 z 方向目标误差大于这个值，说明高度还差很多。
+    double z_freeze_error_threshold_m = 0.20;
+    // 在检测时间窗里，如果实际 z 位移小于这个值，就认为高度基本没变化。
+    double z_freeze_motion_threshold_m = 0.03;
+
+    // ============================================= 安全姿态参数 ================================================
+    // 保护触发后，机械臂回到这组安全角，停止继续对机体叠加扰动。
+    double safety_hold_arm1_deg = 0.0;
+    double safety_hold_arm2_deg = 0.0;
+    double safety_hold_hand_deg = 0.0;
 
     // hover_z:
     //   起飞完成后以及整个实验三主段中的目标高度。
@@ -252,6 +304,18 @@ int main(int argc, char *argv[]) {
     pnh.param("max_altitude_drop", max_altitude_drop, max_altitude_drop);
     pnh.param("protection_trigger_cycles", protection_trigger_cycles, protection_trigger_cycles);
     pnh.param("protection_hold_time", protection_hold_time, protection_hold_time);
+    pnh.param("pose_timeout_sec", pose_timeout_sec, pose_timeout_sec);
+    pnh.param("pose_loss_limit", pose_loss_limit, pose_loss_limit);
+    pnh.param("freeze_window_sec", freeze_window_sec, freeze_window_sec);
+    pnh.param("freeze_motion_threshold_m", freeze_motion_threshold_m, freeze_motion_threshold_m);
+    pnh.param("freeze_arrive_threshold_m", freeze_arrive_threshold_m, freeze_arrive_threshold_m);
+    pnh.param("freeze_trigger_cycles", freeze_trigger_cycles, freeze_trigger_cycles);
+    pnh.param("freeze_escalate_cycles", freeze_escalate_cycles, freeze_escalate_cycles);
+    pnh.param("z_freeze_error_threshold_m", z_freeze_error_threshold_m, z_freeze_error_threshold_m);
+    pnh.param("z_freeze_motion_threshold_m", z_freeze_motion_threshold_m, z_freeze_motion_threshold_m);
+    pnh.param("safety_hold_arm1_deg", safety_hold_arm1_deg, safety_hold_arm1_deg);
+    pnh.param("safety_hold_arm2_deg", safety_hold_arm2_deg, safety_hold_arm2_deg);
+    pnh.param("safety_hold_hand_deg", safety_hold_hand_deg, safety_hold_hand_deg);
 
     // 参数保护：
     // 实验节点启动时优先做简单回退，避免无效参数直接把轨迹公式搞坏。
@@ -288,6 +352,33 @@ int main(int argc, char *argv[]) {
     if (arm2_period <= 0.0) {
         arm2_period = 3.5;
     }
+    if (pose_timeout_sec <= 0.0) {
+        pose_timeout_sec = 0.3;
+    }
+    if (pose_loss_limit < 1) {
+        pose_loss_limit = 1;
+    }
+    if (freeze_window_sec <= 0.0) {
+        freeze_window_sec = 1.0;
+    }
+    if (freeze_motion_threshold_m <= 0.0) {
+        freeze_motion_threshold_m = 0.03;
+    }
+    if (freeze_arrive_threshold_m <= 0.0) {
+        freeze_arrive_threshold_m = 0.15;
+    }
+    if (freeze_trigger_cycles < 1) {
+        freeze_trigger_cycles = 1;
+    }
+    if (freeze_escalate_cycles < 1) {
+        freeze_escalate_cycles = 1;
+    }
+    if (z_freeze_error_threshold_m <= 0.0) {
+        z_freeze_error_threshold_m = 0.20;
+    }
+    if (z_freeze_motion_threshold_m <= 0.0) {
+        z_freeze_motion_threshold_m = 0.03;
+    }
 
     double arm1_min = -180.0;
     double arm1_max = 180.0;
@@ -305,6 +396,9 @@ int main(int argc, char *argv[]) {
     arm1_offset_deg = Clamp(arm1_offset_deg, arm1_min, arm1_max);
     arm2_offset_deg = Clamp(arm2_offset_deg, arm2_min, arm2_max);
     hand_hold_deg = Clamp(hand_hold_deg, hand_min, hand_max);
+    safety_hold_arm1_deg = Clamp(safety_hold_arm1_deg, arm1_min, arm1_max);
+    safety_hold_arm2_deg = Clamp(safety_hold_arm2_deg, arm2_min, arm2_max);
+    safety_hold_hand_deg = Clamp(safety_hold_hand_deg, hand_min, hand_max);
 
     // square_motion_time:
     //   实验三主段总时长。固定为 4 条边总时间，不再单独维护 experiment_time。
@@ -344,10 +438,10 @@ int main(int argc, char *argv[]) {
         arm1_offset_deg, arm1_amp_deg, arm1_period, arm1_phase_deg, arm2_offset_deg,
         arm2_amp_deg, arm2_period, arm2_phase_deg);
     ROS_INFO(
-        "exp3 protection: enable=%s, auto_land=%s, pose_gap<=%.2f m, track_err<=%.2f m, max_drop<=%.2f m, trigger_cycles=%d, hold_time=%.2f s",
+        "exp3 protection: enable=%s, auto_land=%s, pose_gap<=%.2f m, track_err<=%.2f m, max_drop<=%.2f m, trigger_cycles=%d, hold_time=%.2f s, pose_timeout=%.2f s, freeze_window=%.2f s",
         enable_protection ? "true" : "false", protection_auto_land ? "true" : "false",
         max_pose_disagreement, max_tracking_error, max_altitude_drop, protection_trigger_cycles,
-        protection_hold_time);
+        protection_hold_time, pose_timeout_sec, freeze_window_sec);
 
     ros::Rate rate(30.0);
     while (ros::ok() && !start_flag) {
@@ -377,11 +471,17 @@ int main(int argc, char *argv[]) {
     double square_origin_x = 0.0;
     double square_origin_y = 0.0;
     bool protection_triggered = false;
+    bool safety_landing_triggered = false;
+    std::string protection_reason = "none";
     ros::Time protection_start_time;
     int protection_violation_count = 0;
+    int pose_loss_count = 0;
+    int freeze_fault_count = 0;
+    int protection_escalate_count = 0;
     double last_pose_disagreement = 0.0;
     double last_tracking_error = 0.0;
     double last_altitude_drop = 0.0;
+    FreezeWindowState freeze_window_state;
     uav::xyz_yaw_d last_safe_uav_pos_d = uav_pos_d;
 
     const ros::Time experiment_start = ros::Time::now();
@@ -416,11 +516,13 @@ int main(int argc, char *argv[]) {
         //    仅在 protection_auto_land=true 时启用，保护保持一段时间后触发降落。
         if (protection_triggered) {
             const double protection_elapsed = (now - protection_start_time).toSec();
-            if (protection_auto_land &&
+            if ((safety_landing_triggered ||
+                 (protection_auto_land && protection_elapsed >= protection_hold_time)) &&
                 protection_elapsed >= protection_hold_time + landing_publish_time.toSec()) {
                 break;
             }
-            stage = protection_auto_land && protection_elapsed >= protection_hold_time ? 5 : 4;
+            stage = (safety_landing_triggered ||
+                     (protection_auto_land && protection_elapsed >= protection_hold_time)) ? 5 : 4;
         } else if (elapsed < settle_time) {
             stage = 0;
         } else if (elapsed < settle_time + square_motion_time) {
@@ -540,10 +642,16 @@ int main(int argc, char *argv[]) {
             // 基座停在最近一次确认“还算安全”的 setpoint，
             // 机械臂全部回 offset，避免继续给飞机叠加扰动。
             uav_pos_d = last_safe_uav_pos_d;
+            current_angle.arm1_angle = safety_hold_arm1_deg;
+            current_angle.arm2_angle = safety_hold_arm2_deg;
+            current_angle.hand_angle = safety_hold_hand_deg;
         } else if (stage == 5) {
             uav_pos_d = last_safe_uav_pos_d;
             uav_pos_d.z_d = 0.5;
             uav_pos_d.land_flag = true;
+            current_angle.arm1_angle = safety_hold_arm1_deg;
+            current_angle.arm2_angle = safety_hold_arm2_deg;
+            current_angle.hand_angle = safety_hold_hand_deg;
         }
 
         // ----------------------------
@@ -557,6 +665,10 @@ int main(int argc, char *argv[]) {
         // 4. mavros/state 是否仍然 connected
         if (!protection_triggered && enable_protection && stage <= 2) {
             bool violation = false;
+            bool freshness_fault = false;
+            bool freeze_fault_active = false;
+            const bool local_fresh = IsPoseFresh(g_base_pose, now, pose_timeout_sec);
+            const bool vrpn_fresh = IsPoseFresh(g_vrpn_pose, now, pose_timeout_sec);
 
             if (g_vrpn_pose.valid && g_base_pose.valid) {
                 const double dx = g_vrpn_pose.x - g_base_pose.x;
@@ -587,25 +699,157 @@ int main(int argc, char *argv[]) {
                 violation = true;
             }
 
+            // 新增 freshness 保护：
+            // 实验三保留旧的“真值偏差/掉高”保护，同时再补一层“数据根本不新鲜”保护，
+            // 防止 arm_base 或 local pose 超时后仍继续推进方形轨迹。
+            freshness_fault =
+                !local_fresh ||
+                !vrpn_fresh ||
+                (g_mavros_state.valid && !g_mavros_state.connected);
+            if (freshness_fault) {
+                ++pose_loss_count;
+                ROS_WARN_THROTTLE(
+                    1.0,
+                    "exp3 freshness fault: local_fresh=%s, base_fresh=%s, mavros_connected=%s (%d/%d)",
+                    local_fresh ? "true" : "false", vrpn_fresh ? "true" : "false",
+                    g_mavros_state.connected ? "true" : "false", pose_loss_count, pose_loss_limit);
+                if (pose_loss_count >= pose_loss_limit) {
+                    protection_triggered = true;
+                    protection_start_time = now;
+                    protection_reason = "arm_base/local pose freshness lost";
+                }
+            } else {
+                pose_loss_count = 0;
+            }
+
+            // 新增冻结保护：
+            // 覆盖“动捕刚体丢失但一直发最后一帧”的故障。
+            // 这种情况下 local pose 可能仍然 fresh，但如果目标误差持续存在且位置长时间几乎不动，
+            // 就不能继续让方形轨迹往前推。
+            if (local_fresh) {
+                if (!freeze_window_state.initialized) {
+                    freeze_window_state.initialized = true;
+                    freeze_window_state.stamp = now;
+                    freeze_window_state.x = g_base_pose.x;
+                    freeze_window_state.y = g_base_pose.y;
+                    freeze_window_state.z = g_base_pose.z;
+                } else if ((now - freeze_window_state.stamp).toSec() >= freeze_window_sec) {
+                    const double dx = g_base_pose.x - freeze_window_state.x;
+                    const double dy = g_base_pose.y - freeze_window_state.y;
+                    const double dz = g_base_pose.z - freeze_window_state.z;
+                    const double motion_norm = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    const double ex = uav_pos_d.x_d - g_base_pose.x;
+                    const double ey = uav_pos_d.y_d - g_base_pose.y;
+                    const double ez = uav_pos_d.z_d - g_base_pose.z;
+                    const double pos_error_norm = std::sqrt(ex * ex + ey * ey + ez * ez);
+                    const double z_error = std::fabs(ez);
+                    const double z_motion = std::fabs(g_base_pose.z - freeze_window_state.z);
+                    const bool generic_freeze_fault =
+                        pos_error_norm > freeze_arrive_threshold_m &&
+                        motion_norm < freeze_motion_threshold_m;
+                    const bool z_freeze_fault =
+                        z_error > z_freeze_error_threshold_m &&
+                        z_motion < z_freeze_motion_threshold_m;
+                    freeze_fault_active = generic_freeze_fault || z_freeze_fault;
+                    if (freeze_fault_active) {
+                        ++freeze_fault_count;
+                        ROS_WARN_THROTTLE(
+                            1.0,
+                            "exp3 freeze guard: pos_error=%.3f m, motion=%.3f m, z_error=%.3f m, z_motion=%.3f m (%d/%d)",
+                            pos_error_norm, motion_norm, z_error, z_motion,
+                            freeze_fault_count, freeze_trigger_cycles);
+                        if (freeze_fault_count >= freeze_trigger_cycles) {
+                            protection_triggered = true;
+                            protection_start_time = now;
+                            protection_reason = "local pose frozen before target reached";
+                        }
+                    } else {
+                        freeze_fault_count = 0;
+                    }
+                    freeze_window_state.stamp = now;
+                    freeze_window_state.x = g_base_pose.x;
+                    freeze_window_state.y = g_base_pose.y;
+                    freeze_window_state.z = g_base_pose.z;
+                }
+            } else {
+                freeze_window_state.initialized = false;
+                freeze_fault_count = 0;
+            }
+
             if (violation) {
                 protection_violation_count++;
             } else {
                 protection_violation_count = 0;
-                last_safe_uav_pos_d = uav_pos_d;
+                if (!freshness_fault) {
+                    last_safe_uav_pos_d = uav_pos_d;
+                }
             }
 
             if (protection_violation_count >= protection_trigger_cycles) {
                 protection_triggered = true;
                 protection_start_time = now;
+                protection_reason = "legacy truth-gap protection";
                 uav_pos_d = last_safe_uav_pos_d;
-                current_angle.arm1_angle = arm1_offset_deg;
-                current_angle.arm2_angle = arm2_offset_deg;
-                current_angle.hand_angle = hand_hold_deg;
+                current_angle.arm1_angle = safety_hold_arm1_deg;
+                current_angle.arm2_angle = safety_hold_arm2_deg;
+                current_angle.hand_angle = safety_hold_hand_deg;
                 ROS_ERROR(
                     "exp3 protection triggered: pose_gap=%.3f m, track_err=%.3f m, altitude_drop=%.3f m, mavros_connected=%s, mode=%s",
                     last_pose_disagreement, last_tracking_error, last_altitude_drop,
                     g_mavros_state.connected ? "true" : "false",
                     g_mavros_state.mode.c_str());
+            }
+        }
+
+        if (protection_triggered && !safety_landing_triggered && stage == 4) {
+            const bool local_fresh = IsPoseFresh(g_base_pose, now, pose_timeout_sec);
+            const bool vrpn_fresh = IsPoseFresh(g_vrpn_pose, now, pose_timeout_sec);
+            bool persistent_fault =
+                !local_fresh ||
+                !vrpn_fresh ||
+                (g_mavros_state.valid && !g_mavros_state.connected);
+            if (local_fresh) {
+                if (!freeze_window_state.initialized) {
+                    freeze_window_state.initialized = true;
+                    freeze_window_state.stamp = now;
+                    freeze_window_state.x = g_base_pose.x;
+                    freeze_window_state.y = g_base_pose.y;
+                    freeze_window_state.z = g_base_pose.z;
+                } else if ((now - freeze_window_state.stamp).toSec() >= freeze_window_sec) {
+                    const double dx = g_base_pose.x - freeze_window_state.x;
+                    const double dy = g_base_pose.y - freeze_window_state.y;
+                    const double dz = g_base_pose.z - freeze_window_state.z;
+                    const double motion_norm = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    const double ex = last_safe_uav_pos_d.x_d - g_base_pose.x;
+                    const double ey = last_safe_uav_pos_d.y_d - g_base_pose.y;
+                    const double ez = last_safe_uav_pos_d.z_d - g_base_pose.z;
+                    const double pos_error_norm = std::sqrt(ex * ex + ey * ey + ez * ez);
+                    const double z_error = std::fabs(ez);
+                    const double z_motion = std::fabs(g_base_pose.z - freeze_window_state.z);
+                    persistent_fault =
+                        persistent_fault ||
+                        (pos_error_norm > freeze_arrive_threshold_m &&
+                         motion_norm < freeze_motion_threshold_m) ||
+                        (z_error > z_freeze_error_threshold_m &&
+                         z_motion < z_freeze_motion_threshold_m);
+                    freeze_window_state.stamp = now;
+                    freeze_window_state.x = g_base_pose.x;
+                    freeze_window_state.y = g_base_pose.y;
+                    freeze_window_state.z = g_base_pose.z;
+                }
+            } else {
+                freeze_window_state.initialized = false;
+            }
+            if (persistent_fault) {
+                ++protection_escalate_count;
+                if (protection_escalate_count >= freeze_escalate_cycles) {
+                    safety_landing_triggered = true;
+                    protection_start_time = now;
+                    ROS_ERROR("exp3 protection escalated to safety_landing: %s",
+                              protection_reason.c_str());
+                }
+            } else {
+                protection_escalate_count = 0;
             }
         }
 
@@ -628,9 +872,10 @@ int main(int argc, char *argv[]) {
                 g_base_pose.valid ? "true" : "false", uav_pos_d.land_flag ? "true" : "false");
             if (enable_protection) {
                 ROS_INFO(
-                    "exp3 protection monitor: pose_gap=%.3f m, track_err=%.3f m, altitude_drop=%.3f m, count=%d, vrpn_valid=%s, mavros_connected=%s, mode=%s",
+                    "exp3 protection monitor: pose_gap=%.3f m, track_err=%.3f m, altitude_drop=%.3f m, count=%d, pose_loss=%d, freeze_count=%d, reason=%s, vrpn_valid=%s, mavros_connected=%s, mode=%s",
                     last_pose_disagreement, last_tracking_error, last_altitude_drop,
-                    protection_violation_count, g_vrpn_pose.valid ? "true" : "false",
+                    protection_violation_count, pose_loss_count, freeze_fault_count,
+                    protection_reason.c_str(), g_vrpn_pose.valid ? "true" : "false",
                     g_mavros_state.connected ? "true" : "false", g_mavros_state.mode.c_str());
             }
         }

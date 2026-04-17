@@ -22,7 +22,7 @@ if [ -f "$HOME/p600_arm_control/devel/setup.bash" ]; then
   source "$HOME/p600_arm_control/devel/setup.bash"
 fi
 
-EXPERIMENT_MODE="${1:-exp4_ring_passage}"
+EXPERIMENT_MODE="${1:-exp4_weaving}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 OUTPUT_DIR="$HOME/p600_arm_control/data/experiment4/$TIMESTAMP"
 BAG_PATH="$OUTPUT_DIR/experiment4_px4.bag"
@@ -54,11 +54,11 @@ echo "Metadata saved to: $META_PATH"
 echo "Press Ctrl-C to stop rosbag recording."
 
 rosbag record -O "$BAG_PATH" \
-  /vrpn_client_node/Tracker0/pose \
-  /vrpn_client_node/ring1/pose \
-  /vrpn_client_node/ring2/pose \
-  /vrpn_client_node/ring3/pose \
-  /vrpn_client_node/ring4/pose \
+  /vrpn_client_node/arm_base/pose \
+  /vrpn_client_node/arm_target/pose \
+  /vrpn_client_node/target0/pose \
+  /vrpn_client_node/target1/pose \
+  /vrpn_client_node/target2/pose \
   /mavros/local_position/pose \
   /mavros/vision_pose/pose \
   /mavros/state \

@@ -76,12 +76,47 @@
         <param name="arm1_zero_offset_deg" value="-7.011313" />
         <param name="arm2_zero_offset_deg" value="-5.434880" />
 
-        <!-- 动捕与 IK 保护参数 -->
+        <!-- =============================================位置更新的新鲜度保护================================================ -->
+        <!-- 超过这个时间没新鲜数据，就认为 arm_base/arm_target/local pose 不可靠 -->
         <param name="pose_timeout_sec" value="0.8" />
+        <!-- 连续多少次检测到位姿超时后，才真正触发保护 -->
+        <param name="pose_loss_limit" value="10" />
+
+        <!-- 动捕与 IK 保护参数 -->
         <param name="eps_r_m" value="0.01" />
         <param name="eps_xy_m" value="0.015" />
         <param name="ik_fail_limit" value="10" />
-        <param name="pose_loss_limit" value="10" />
+
+        <!-- ==============================================数据回传丢失保护================================================= -->
+        <!-- ======================================= 三维总数据（模长）回传丢失保护 ===================================-->
+        <!-- 在这么长一段时间内，检查飞机实际位置有没有明显动
+             用来抓这种故障：动捕刚体丢了，但还一直在发最后一帧，飞机以为自己没动，于是一直追目标 -->
+        <param name="freeze_window_sec" value="1.0" />
+        <!-- 在 freeze_window_sec 这个时间窗里，如果实际位置总位移小于这个值，就认为“几乎没动” -->
+        <param name="freeze_motion_threshold_m" value="0.03" />
+        <!-- 只有当“当前还没到目标点”时，冻结保护才有意义。如果当前位置和目标点的误差大于这个值，说明还没到 -->
+        <param name="freeze_arrive_threshold_m" value="0.15" />
+        <!-- 冻结故障连续命中多少次后，进入 safety_hold -->
+        <param name="freeze_trigger_cycles" value="2" />
+        <!-- 进入 safety_hold 后，如果异常还持续，再连续多少次后升级到 safety_landing -->
+        <param name="freeze_escalate_cycles" value="6" />
+
+        <!-- =========================================== 单Z轴数据回传丢失保护 ============================================-->
+        <!-- 专门针对高度方向的冻结保护。如果 z 方向目标误差大于这个值，说明高度还差很多 -->
+        <param name="z_freeze_error_threshold_m" value="0.20" />
+        <!-- 在检测时间窗里，如果实际 z 位移小于这个值，就认为高度基本没变化 -->
+        <param name="z_freeze_motion_threshold_m" value="0.03" />
+
+        <!-- ============================================= 安全有效指令筛选 ================================================ -->
+        <!-- 单周期输出指令如果跳变量过大，就不更新 last_safe_*，避免把坏指令当成安全参考 -->
+        <param name="uav_cmd_jump_threshold_m" value="0.25" />
+        <!-- 只有低于这个高度的输出点才允许被缓存成安全参考 -->
+        <param name="uav_safe_z_max_m" value="2.5" />
+
+        <!-- ============================================= 安全姿态参数 ================================================ -->
+        <!-- 保护触发后，机械臂回到这组安全角，停止继续给机体叠加扰动 -->
+        <param name="safety_arm1_deg" value="0.0" />
+        <param name="safety_arm2_deg" value="0.0" />
 
         <!-- 关节速度限幅，单位 deg/s -->
         <param name="arm1_dot_max_deg_s" value="90.0" />

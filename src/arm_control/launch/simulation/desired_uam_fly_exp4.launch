@@ -5,30 +5,88 @@
     <node pkg="arm_control" type="uam_desired_exp4" name="uam_desired_exp4" output="screen">
         <param name="hover_z" value="1.0" />
         <param name="hover_yaw_deg" value="0.0" />
+        <!-- ==========================================状态机切换的时间间隔=============================================== -->
+        <!-- 
+            起飞后流程是：settle => axis_move_y => axis_move_x => pass => depart
+                        => target0 -> target1 -> target2 中间只有 2->0 继续走 axis_move_y -> axis_move_x
+                        => 其它段是正常的 approach -> pass -> depart
+                        => 最后从 target2 回原点时也是 axis_move_y -> axis_move_x
+                        landing 
+        -->
+        <!-- 起飞后到正式开始任务前的稳定悬停时间。 -->
         <param name="settle_time" value="3.0" />
-        <param name="recovery_time" value="3.0" />
-        <param name="landing_z" value="0.5" />
+        <!-- 从当前点飞到“钩子前准备点”的时间 -->
         <param name="approach_time" value="3.0" />
+        <!-- “过钩子工作点”的时间 -->
         <param name="pass_time" value="2.0" />
+        <!-- 过完钩子后的退出时间 -->
         <param name="depart_time" value="3.0" />
-        <param name="ee_nominal_x" value="0.18" />
-        <param name="ee_nominal_y" value="0.0" />
-        <param name="ee_nominal_z" value="0.06" />
-        <param name="ring_pose_timeout_sec" value="0.3" />
-        <param name="ring_loss_limit" value="10" />
-        <param name="ik_fail_limit" value="10" />
+        <!-- 当前单轮逻辑里最后一段是 target2 -> 原点 的 axis_move_y -> axis_move_x -> landing，
+             暂时不走 return_hover，所以这个参数先注释保留。 -->
+        <!-- <param name="return_time" value="3.0" /> -->
+        <param name="landing_z" value="0.5" />
+        <!-- =============================================targets目标和自身位置更新的新鲜度保护================================================ -->
+        <!-- 超过这个时间没新鲜数据，就认为动捕不可靠 -->
+        <param name="target_pose_timeout_sec" value="0.3" />
+        <!-- 连续多少次检测到 target/位姿超时后，才真正触发保护。 -->
+        <param name="target_loss_limit" value="10" />
         <param name="base_step_limit_xy" value="0.03" />
         <param name="base_step_limit_z" value="0.02" />
-        <param name="hand_hold_deg" value="25.0" />
-        <rosparam param="ring_names">[ring1, ring2, ring3, ring4]</rosparam>
-        <rosparam param="final_hover_offset_xyz">[-0.30, 0.0, 0.0]</rosparam>
-        <rosparam param="rings/ring1/approach_offset_xyz">[0.20, 0.0, 0.0]</rosparam>
-        <rosparam param="rings/ring1/depart_offset_xyz">[-0.20, 0.0, 0.0]</rosparam>
-        <rosparam param="rings/ring2/approach_offset_xyz">[0.20, 0.0, 0.0]</rosparam>
-        <rosparam param="rings/ring2/depart_offset_xyz">[-0.20, 0.0, 0.0]</rosparam>
-        <rosparam param="rings/ring3/approach_offset_xyz">[0.20, 0.0, 0.0]</rosparam>
-        <rosparam param="rings/ring3/depart_offset_xyz">[-0.20, 0.0, 0.0]</rosparam>
-        <rosparam param="rings/ring4/approach_offset_xyz">[0.20, 0.0, 0.0]</rosparam>
-        <rosparam param="rings/ring4/depart_offset_xyz">[-0.20, 0.0, 0.0]</rosparam>
+        <param name="fixed_arm1_deg" value="0.0" />
+        <param name="fixed_arm2_deg" value="0.0" />
+        <param name="fixed_hand_deg" value="25.0" />
+        <!-- ==============================================数据回传丢失保护================================================= -->
+        <!-- ======================================= 三维总数据（模长）回传丢失保护 ===================================-->
+        <!-- 在这么长一段时间内，检查飞机实际位置有没有明显动 
+        用来抓这种故障：动捕刚体丢了,但还一直在发最后一帧,飞机以为自己没动，于是一直追目标-->
+        <param name="freeze_window_sec" value="1.0" />
+        <!-- 在 freeze_window_sec 这个时间窗里，如果实际位置总位移小于这个值，就认为“几乎没动” -->
+        <param name="freeze_motion_threshold_m" value="0.03" />
+        <!-- 只有当“当前还没到目标点”时，冻结保护才有意义。如果当前位置和目标点的误差大于这个值，说明还没到,这时如果飞机又长时间不动，就可判定异常 -->
+        <param name="freeze_arrive_threshold_m" value="0.15" />
+        <!-- 冻结故障连续命中多少次后，进入 safety_hold。 -->
+        <param name="freeze_trigger_cycles" value="3" />
+        <!-- 进入 safety_hold 后，如果异常还持续，再连续多少次后升级到 safety_landing -->
+        <param name="freeze_escalate_cycles" value="6" />
+        <!-- =========================================== 单Z轴数据回传丢失保护 ============================================-->
+        <!-- 专门针对高度方向的冻结保护。如果 z 方向目标误差大于这个值,说明高度还差很多 -->
+        <param name="z_freeze_error_threshold_m" value="0.20" />
+        <!-- 在检测时间窗里，如果实际 z 位移小于这个值,就认为高度基本没变化 -->
+        <param name="z_freeze_motion_threshold_m" value="0.03" />
+        <!-- ============================ 所有“先走 y，再走 x”的特殊转场共用这两个时间 =============================== -->
+        <!-- 含义：“先走 y” 这一段要走多久.值越大，y 向移动越慢;值越小，y 向移动越快 -->
+        <param name="first_target1_axis_move_time_y" value="2.0" />
+        <!-- 含义：“再走 x” 这一段要走多久.值越大，x 向移动越慢;值越小，x 向移动越快 -->
+        <param name="first_target1_axis_move_time_x" value="2.0" />
+
+        <param name="base_world_pose_topic" value="/vrpn_client_node/arm_base/pose" />
+        <param name="local_pose_topic" value="/mavros/local_position/pose" />
+
+        <rosparam param="target_names">[target0, target1, target2]</rosparam>
+        <rosparam param="visit_sequence">[2, 0, 1, 2]</rosparam>
+
+        <!-- target rigid body 原点 -> 钩子真正工作点 的偏移 -->
+        <rosparam param="targets/target0/first_pass_approach_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
+        <rosparam param="targets/target0/first_pass_work_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
+        <rosparam param="targets/target0/first_pass_depart_offset_xyz">[-0.05, 0.00, 0.05]</rosparam>
+        <!-- 当前单轮路径不再第二次经过 target0，second_pass 先注释保留。 -->
+        <!-- <rosparam param="targets/target0/second_pass_approach_offset_xyz">[0.00, 0.00, 0.08]</rosparam> -->
+        <!-- <rosparam param="targets/target0/second_pass_work_offset_xyz">[0.00, 0.00, 0.03]</rosparam> -->
+        <!-- <rosparam param="targets/target0/second_pass_depart_offset_xyz">[-0.05, 0.00, 0.08]</rosparam> -->
+
+        <rosparam param="targets/target1/first_pass_approach_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
+        <rosparam param="targets/target1/first_pass_work_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
+        <rosparam param="targets/target1/first_pass_depart_offset_xyz">[0.05, 0.00, 0.05]</rosparam>
+        <!-- 当前单轮路径不再第二次经过 target1，second_pass 先注释保留。 -->
+        <!-- <rosparam param="targets/target1/second_pass_approach_offset_xyz">[0.00, 0.00, 0.08]</rosparam> -->
+        <!-- <rosparam param="targets/target1/second_pass_work_offset_xyz">[0.00, 0.00, 0.03]</rosparam> -->
+        <!-- <rosparam param="targets/target1/second_pass_depart_offset_xyz">[0.05, 0.00, 0.08]</rosparam> -->
+
+        <rosparam param="targets/target2/first_pass_approach_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
+        <rosparam param="targets/target2/first_pass_work_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
+        <rosparam param="targets/target2/first_pass_depart_offset_xyz">[-0.05, 0.00, 0.05]</rosparam>
+        <rosparam param="targets/target2/second_pass_approach_offset_xyz">[0.00, 0.00, 0.08]</rosparam>
+        <rosparam param="targets/target2/second_pass_work_offset_xyz">[0.00, 0.00, 0.03]</rosparam>
+        <rosparam param="targets/target2/second_pass_depart_offset_xyz">[-0.05, 0.00, 0.08]</rosparam>
     </node>
 </launch>

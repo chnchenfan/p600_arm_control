@@ -1,6 +1,58 @@
 <?xml version="1.0"?>
 <launch>
     <rosparam file="$(find uam_message)/config/arm_info_init.yaml" command="load" />
-    <node pkg="arm_control" type="motors_simulation" name="motors_simulation"   output="screen" />
-    <node pkg="arm_control" type="uam_desired" name="uam_desired"   output="screen" />
+    <node pkg="arm_control" type="motors_simulation" name="motors_simulation" output="screen" />
+    <node pkg="arm_control" type="uam_desired" name="uam_desired" output="screen">
+        <param name="hover_x" value="0.0" />
+        <param name="hover_y" value="0.0" />
+        <param name="hover_z" value="1.0" />
+        <param name="hover_yaw_deg" value="0.0" />
+        <param name="settle_time" value="3.0" />
+        <param name="experiment_time" value="20.0" />
+        <param name="recovery_time" value="2.0" />
+        <param name="landing_z" value="0.5" />
+
+        <param name="arm1_offset_deg" value="0.0" />
+        <param name="arm1_amp_deg" value="6.0" />
+        <param name="arm1_period" value="3.5" />
+        <param name="arm1_phase_deg" value="90.0" />
+        <param name="arm1_sign" value="1.0" />
+        <param name="arm2_offset_deg" value="0.0" />
+        <param name="arm2_amp_deg" value="15.0" />
+        <param name="arm2_period" value="3.5" />
+        <param name="arm2_phase_deg" value="0.0" />
+        <param name="arm2_sign" value="1.0" />
+        <param name="hand_hold_deg" value="0.0" />
+
+        <!-- =============================================位置更新的新鲜度保护================================================ -->
+        <!-- 超过这个时间没新鲜数据，就认为 arm_base/local pose 不可靠 -->
+        <param name="pose_timeout_sec" value="0.3" />
+        <!-- 连续多少次检测到位姿超时后，才真正触发保护 -->
+        <param name="pose_loss_limit" value="10" />
+
+        <!-- ==============================================数据回传丢失保护================================================= -->
+        <!-- ======================================= 三维总数据（模长）回传丢失保护 ===================================-->
+        <!-- 在这么长一段时间内，检查飞机实际位置有没有明显动 -->
+        <param name="freeze_window_sec" value="1.0" />
+        <!-- 在 freeze_window_sec 这个时间窗里，如果实际位置总位移小于这个值，就认为“几乎没动” -->
+        <param name="freeze_motion_threshold_m" value="0.03" />
+        <!-- 只有当“当前还没到目标点”时，冻结保护才有意义 -->
+        <param name="freeze_arrive_threshold_m" value="0.15" />
+        <!-- 冻结故障连续命中多少次后，进入 safety_hold -->
+        <param name="freeze_trigger_cycles" value="3" />
+        <!-- 进入 safety_hold 后，如果异常还持续，再连续多少次后升级到 safety_landing -->
+        <param name="freeze_escalate_cycles" value="6" />
+
+        <!-- =========================================== 单Z轴数据回传丢失保护 ============================================-->
+        <!-- 专门针对高度方向的冻结保护。如果 z 方向目标误差大于这个值，说明高度还差很多 -->
+        <param name="z_freeze_error_threshold_m" value="0.20" />
+        <!-- 在检测时间窗里，如果实际 z 位移小于这个值，就认为高度基本没变化 -->
+        <param name="z_freeze_motion_threshold_m" value="0.03" />
+
+        <!-- ============================================= 安全姿态参数 ================================================ -->
+        <!-- 保护触发后，机械臂回到这组安全角，停止继续给机体叠加扰动 -->
+        <param name="safety_hold_arm1_deg" value="0.0" />
+        <param name="safety_hold_arm2_deg" value="0.0" />
+        <param name="safety_hold_hand_deg" value="0.0" />
+    </node>
 </launch>
