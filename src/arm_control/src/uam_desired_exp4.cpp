@@ -65,7 +65,8 @@ enum class MotionStage {
     kPass = 4,
     kDepart = 5,
     kReturnHover = 6,
-    kLanding = 7,
+    kFinalHold = 7,
+    kLanding = 8,
 };
 
 enum class ProtectionState {
@@ -238,6 +239,8 @@ const char *MotionStageName(MotionStage stage) {
             return "depart";
         case MotionStage::kReturnHover:
             return "return_hover";
+        case MotionStage::kFinalHold:
+            return "final_hold";
         case MotionStage::kLanding:
             return "landing";
         default:
@@ -430,7 +433,7 @@ int main(int argc, char *argv[]) {
     std::string local_pose_topic = "/mavros/local_position/pose";
 
     std::vector<std::string> target_names = {"target0", "target1", "target2"};
-    std::vector<int> visit_sequence = {2, 0, 1, 2};
+    std::vector<int> visit_sequence = {1, 0, 2};
     LoadStringVectorParam(pnh, "target_names", target_names, &target_names);
     LoadIntVectorParam(pnh, "visit_sequence", visit_sequence, &visit_sequence);
 
@@ -465,7 +468,7 @@ int main(int argc, char *argv[]) {
         target_names = {"target0", "target1", "target2"};
     }
     if (visit_sequence.empty()) {
-        visit_sequence = {2, 0, 1, 2};
+        visit_sequence = {1, 0, 2};
     }
     if (settle_time < 0.0) {
         settle_time = 0.0;
@@ -749,8 +752,8 @@ int main(int argc, char *argv[]) {
         if (stage == MotionStage::kDepart) {
             return depart_time;
         }
-        // 当前单轮路径的最后一段是 target2 -> 原点 的 axis_move_y -> axis_move_x，
-        // 正常情况下不会走到 kReturnHover，这里先保留给后续改回通用回撤逻辑时使用。
+        // 当前路径最后一段改成 final_hold，不再走 return_hover；
+        // 这里先保留给后续改回“返回悬停点”逻辑时使用。
         if (stage == MotionStage::kReturnHover) {
             return return_time;
         }
@@ -759,13 +762,13 @@ int main(int argc, char *argv[]) {
 
     auto should_use_axis_first_to_target = [&](int previous_target_index, int next_target_index, bool from_hover) {
         if (from_hover) {
-            return next_target_index == 2;
+            return next_target_index == 1;
         }
-        return previous_target_index == 2 && next_target_index == 0;
+        return previous_target_index == 1 && next_target_index == 0;
     };
 
     auto should_use_axis_first_return = [&](int previous_target_index) {
-        return previous_target_index == 2;
+        return false;
     };
 
     auto enter_protection_state = [&](ProtectionState next_state, const std::string &reason) {
@@ -912,9 +915,8 @@ int main(int argc, char *argv[]) {
                                motion_stage == MotionStage::kAxisMoveX) {
                         stage_goal_output = axis_move_goal_output;
                         // “先走 y，再走 x” 的特殊路径都保持当前段起点高度不变：
-                        // - 起飞悬停后去 target2：保持 hover 高度
-                        // - target2 -> target0：保持 depart 段结束时的当前高度
-                        // - target2 -> 原点：保持回撤前的当前高度
+                        // - 起飞悬停后去 target1：保持 hover 高度
+                        // - target1 -> target0：保持 depart 段结束时的当前高度
                         if (motion_stage == MotionStage::kAxisMoveY) {
                             stage_goal_output.x = segment_start_output.x;
                             stage_goal_output.z = segment_start_output.z;
@@ -1031,13 +1033,7 @@ int main(int argc, char *argv[]) {
                                     enter_motion_stage(MotionStage::kApproach);
                                 }
                             } else {
-                                const int previous_target_index = visit_sequence[visit_index];
-                                if (should_use_axis_first_return(previous_target_index)) {
-                                    enter_axis_move(hover_anchor_output, MotionStage::kLanding);
-                                } else {
-                                    // 当前单轮路径不会走到这里，保留给后续非“2->原点先走 y 再走 x”的回撤方案。
-                                    enter_motion_stage(MotionStage::kReturnHover);
-                                }
+                                enter_motion_stage(MotionStage::kFinalHold);
                             }
                         } else if (motion_stage == MotionStage::kReturnHover) {
                             enter_motion_stage(MotionStage::kLanding);
@@ -1046,6 +1042,11 @@ int main(int argc, char *argv[]) {
                 } else {
                     next_uav_pos_d = uav_pos_d;
                 }
+            } else if (motion_stage == MotionStage::kFinalHold) {
+                next_uav_pos_d.x_d = uav_pos_d.x_d;
+                next_uav_pos_d.y_d = uav_pos_d.y_d;
+                next_uav_pos_d.z_d = uav_pos_d.z_d;
+                next_uav_pos_d.land_flag = false;
             } else if (motion_stage == MotionStage::kLanding) {
                 stage_elapsed += dt;
                 next_uav_pos_d.x_d = hover_anchor_initialized ? hover_anchor_output.x : uav_pos_d.x_d;

@@ -7,11 +7,10 @@
         <param name="hover_yaw_deg" value="0.0" />
         <!-- ==========================================状态机切换的时间间隔=============================================== -->
         <!-- 
-            起飞后流程是：settle => axis_move_y => axis_move_x => pass => depart
-                        => target0 -> target1 -> target2 中间只有 2->0 继续走 axis_move_y -> axis_move_x
-                        => 其它段是正常的 approach -> pass -> depart
-                        => 最后从 target2 回原点时也是 axis_move_y -> axis_move_x
-                        landing 
+            起飞后流程是：settle => axis_move_y => axis_move_x => target1(pass -> depart,+x 2cm)
+                        => target1 -> target0 中间继续走 axis_move_y -> axis_move_x
+                        => target0(pass -> depart) => target2(pass -> depart,-x 2cm)
+                        => final_hold 悬停，不降落
         -->
         <!-- 起飞后到正式开始任务前的稳定悬停时间。 -->
         <param name="settle_time" value="3.0" />
@@ -21,8 +20,7 @@
         <param name="pass_time" value="2.0" />
         <!-- 过完钩子后的退出时间 -->
         <param name="depart_time" value="3.0" />
-        <!-- 当前单轮逻辑里最后一段是 target2 -> 原点 的 axis_move_y -> axis_move_x -> landing，
-             暂时不走 return_hover，所以这个参数先注释保留。 -->
+        <!-- 当前这版逻辑最后是 final_hold，不再返回悬停点，这个参数先注释保留。 -->
         <!-- <param name="return_time" value="3.0" /> -->
         <param name="landing_z" value="0.5" />
         <!-- =============================================targets目标和自身位置更新的新鲜度保护================================================ -->
@@ -63,12 +61,12 @@
         <param name="local_pose_topic" value="/mavros/local_position/pose" />
 
         <rosparam param="target_names">[target0, target1, target2]</rosparam>
-        <rosparam param="visit_sequence">[2, 0, 1, 2]</rosparam>
+        <rosparam param="visit_sequence">[1, 0, 2]</rosparam>
 
         <!-- target rigid body 原点 -> 钩子真正工作点 的偏移 -->
         <rosparam param="targets/target0/first_pass_approach_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
         <rosparam param="targets/target0/first_pass_work_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
-        <rosparam param="targets/target0/first_pass_depart_offset_xyz">[-0.05, 0.00, 0.05]</rosparam>
+        <rosparam param="targets/target0/first_pass_depart_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
         <!-- 当前单轮路径不再第二次经过 target0，second_pass 先注释保留。 -->
         <!-- <rosparam param="targets/target0/second_pass_approach_offset_xyz">[0.00, 0.00, 0.08]</rosparam> -->
         <!-- <rosparam param="targets/target0/second_pass_work_offset_xyz">[0.00, 0.00, 0.03]</rosparam> -->
@@ -76,7 +74,8 @@
 
         <rosparam param="targets/target1/first_pass_approach_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
         <rosparam param="targets/target1/first_pass_work_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
-        <rosparam param="targets/target1/first_pass_depart_offset_xyz">[0.05, 0.00, 0.05]</rosparam>
+        <!-- target1 之后先沿 +x 飞 2cm -->
+        <rosparam param="targets/target1/first_pass_depart_offset_xyz">[0.02, 0.00, 0.05]</rosparam>
         <!-- 当前单轮路径不再第二次经过 target1，second_pass 先注释保留。 -->
         <!-- <rosparam param="targets/target1/second_pass_approach_offset_xyz">[0.00, 0.00, 0.08]</rosparam> -->
         <!-- <rosparam param="targets/target1/second_pass_work_offset_xyz">[0.00, 0.00, 0.03]</rosparam> -->
@@ -84,7 +83,8 @@
 
         <rosparam param="targets/target2/first_pass_approach_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
         <rosparam param="targets/target2/first_pass_work_offset_xyz">[0.00, 0.00, 0.05]</rosparam>
-        <rosparam param="targets/target2/first_pass_depart_offset_xyz">[-0.05, 0.00, 0.05]</rosparam>
+        <!-- target2 之后先沿 -x 飞 2cm，然后 final_hold -->
+        <rosparam param="targets/target2/first_pass_depart_offset_xyz">[-0.02, 0.00, 0.05]</rosparam>
         <rosparam param="targets/target2/second_pass_approach_offset_xyz">[0.00, 0.00, 0.08]</rosparam>
         <rosparam param="targets/target2/second_pass_work_offset_xyz">[0.00, 0.00, 0.03]</rosparam>
         <rosparam param="targets/target2/second_pass_depart_offset_xyz">[-0.05, 0.00, 0.08]</rosparam>
