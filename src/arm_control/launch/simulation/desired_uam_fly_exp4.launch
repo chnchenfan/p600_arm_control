@@ -5,6 +5,8 @@
     <node pkg="arm_control" type="uam_desired_exp4" name="uam_desired_exp4" output="screen">
         <param name="hover_z" value="1.0" />
         <param name="hover_yaw_deg" value="0.0" />
+        <!-- false 时不追 target，只围绕初始悬停点飞一个简单闭环，用于先验证起飞、链路和保护 -->
+        <param name="use_targets" value="flase" />
         <!-- ==========================================状态机切换的时间间隔=============================================== -->
         <!-- 
             起飞后流程是：settle => axis_move_y => axis_move_x => target1(pass -> depart,+x 2cm)
@@ -28,6 +30,10 @@
         <param name="target_pose_timeout_sec" value="0.8" />
         <!-- 连续多少次检测到 target/位姿超时后，才真正触发保护。 -->
         <param name="target_loss_limit" value="10" />
+        <!-- settle 段起飞时，xy 参考的专用限幅。值越小，起飞时横向越保守 -->
+        <param name="settle_takeoff_step_limit_xy" value="0.01" />
+        <!-- settle 段起飞时，z 参考的专用限幅。值越小，起飞上升越慢 -->
+        <param name="settle_takeoff_step_limit_z" value="0.01" />
         <param name="base_step_limit_xy" value="0.03" />
         <param name="base_step_limit_z" value="0.02" />
         <param name="fixed_arm1_deg" value="0.0" />
@@ -56,6 +62,10 @@
         <param name="first_target1_axis_move_time_y" value="2.0" />
         <!-- 含义：“再走 x” 这一段要走多久.值越大，x 向移动越慢;值越小，x 向移动越快 -->
         <param name="first_target1_axis_move_time_x" value="2.0" />
+        <!-- use_targets=false 时，闭环第一段和第三段的 y 偏移 -->
+        <param name="loop_offset_y_m" value="0.50" />
+        <!-- use_targets=false 时，闭环第二段和第三段的 x 偏移 -->
+        <param name="loop_offset_x_m" value="0.50" />
 
         <param name="base_world_pose_topic" value="/vrpn_client_node/arm_base/pose" />
         <param name="local_pose_topic" value="/mavros/local_position/pose" />

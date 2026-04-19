@@ -407,6 +407,7 @@ int main(int argc, char *argv[]) {
 
     double hover_z = 1.0;
     double hover_yaw_deg = 0.0;
+    bool use_targets = true;
     double settle_time = 3.0;
     double approach_time = 3.0;
     double pass_time = 2.0;
@@ -417,6 +418,8 @@ int main(int argc, char *argv[]) {
     int target_loss_limit = 10;
     double output_step_limit_xy = 0.03;
     double output_step_limit_z = 0.02;
+    double settle_takeoff_step_limit_xy = 0.01;
+    double settle_takeoff_step_limit_z = 0.01;
     double fixed_arm1_deg = 0.0;
     double fixed_arm2_deg = 0.0;
     double fixed_hand_deg = 25.0;
@@ -429,6 +432,8 @@ int main(int argc, char *argv[]) {
     double z_freeze_motion_threshold_m = 0.03;
     double first_target1_axis_move_time_y = 2.0;
     double first_target1_axis_move_time_x = 2.0;
+    double loop_offset_y_m = 0.50;
+    double loop_offset_x_m = 0.50;
     std::string base_world_pose_topic = "/vrpn_client_node/arm_base/pose";
     std::string local_pose_topic = "/mavros/local_position/pose";
 
@@ -439,6 +444,7 @@ int main(int argc, char *argv[]) {
 
     pnh.param("hover_z", hover_z, hover_z);
     pnh.param("hover_yaw_deg", hover_yaw_deg, hover_yaw_deg);
+    pnh.param("use_targets", use_targets, use_targets);
     pnh.param("settle_time", settle_time, settle_time);
     pnh.param("approach_time", approach_time, approach_time);
     pnh.param("pass_time", pass_time, pass_time);
@@ -449,6 +455,8 @@ int main(int argc, char *argv[]) {
     pnh.param("target_loss_limit", target_loss_limit, target_loss_limit);
     pnh.param("base_step_limit_xy", output_step_limit_xy, output_step_limit_xy);
     pnh.param("base_step_limit_z", output_step_limit_z, output_step_limit_z);
+    pnh.param("settle_takeoff_step_limit_xy", settle_takeoff_step_limit_xy, settle_takeoff_step_limit_xy);
+    pnh.param("settle_takeoff_step_limit_z", settle_takeoff_step_limit_z, settle_takeoff_step_limit_z);
     pnh.param("fixed_arm1_deg", fixed_arm1_deg, fixed_arm1_deg);
     pnh.param("fixed_arm2_deg", fixed_arm2_deg, fixed_arm2_deg);
     pnh.param("fixed_hand_deg", fixed_hand_deg, fixed_hand_deg);
@@ -461,6 +469,8 @@ int main(int argc, char *argv[]) {
     pnh.param("z_freeze_motion_threshold_m", z_freeze_motion_threshold_m, z_freeze_motion_threshold_m);
     pnh.param("first_target1_axis_move_time_y", first_target1_axis_move_time_y, first_target1_axis_move_time_y);
     pnh.param("first_target1_axis_move_time_x", first_target1_axis_move_time_x, first_target1_axis_move_time_x);
+    pnh.param("loop_offset_y_m", loop_offset_y_m, loop_offset_y_m);
+    pnh.param("loop_offset_x_m", loop_offset_x_m, loop_offset_x_m);
     pnh.param("base_world_pose_topic", base_world_pose_topic, base_world_pose_topic);
     pnh.param("local_pose_topic", local_pose_topic, local_pose_topic);
 
@@ -491,6 +501,12 @@ int main(int argc, char *argv[]) {
     if (target_loss_limit < 1) {
         target_loss_limit = 1;
     }
+    if (settle_takeoff_step_limit_xy <= 0.0) {
+        settle_takeoff_step_limit_xy = 0.01;
+    }
+    if (settle_takeoff_step_limit_z <= 0.0) {
+        settle_takeoff_step_limit_z = 0.01;
+    }
     if (freeze_window_sec <= 0.0) {
         freeze_window_sec = 1.0;
     }
@@ -518,12 +534,14 @@ int main(int argc, char *argv[]) {
     if (first_target1_axis_move_time_x <= 0.0) {
         first_target1_axis_move_time_x = 2.0;
     }
-    for (std::size_t index = 0; index < visit_sequence.size(); ++index) {
-        if (visit_sequence[index] < 0 ||
-            static_cast<std::size_t>(visit_sequence[index]) >= target_names.size()) {
-            ROS_ERROR("exp4 invalid visit_sequence[%zu]=%d, target_names size=%zu",
-                      index, visit_sequence[index], target_names.size());
-            return 1;
+    if (use_targets) {
+        for (std::size_t index = 0; index < visit_sequence.size(); ++index) {
+            if (visit_sequence[index] < 0 ||
+                static_cast<std::size_t>(visit_sequence[index]) >= target_names.size()) {
+                ROS_ERROR("exp4 invalid visit_sequence[%zu]=%d, target_names size=%zu",
+                          index, visit_sequence[index], target_names.size());
+                return 1;
+            }
         }
     }
 
@@ -587,12 +605,18 @@ int main(int argc, char *argv[]) {
 
     ROS_INFO("exp4 service ready, waiting for /wjl/start/uav_desired");
     ROS_INFO(
-        "exp4 params: hover_z=%.2f, yaw=%.2f deg, settle=%.2f s, segment_time=(%.2f, %.2f, %.2f, return=%.2f), landing_z=%.2f, fixed_arm=(%.2f, %.2f, %.2f), target_timeout=%.2f, freeze_window=%.2f, freeze_motion=%.3f",
-        hover_z, hover_yaw_deg, settle_time, approach_time, pass_time, depart_time, return_time,
-        landing_z, fixed_arm1_deg, fixed_arm2_deg, fixed_hand_deg, target_pose_timeout_sec,
-        freeze_window_sec, freeze_motion_threshold_m);
-    for (std::size_t index = 0; index < target_configs.size(); ++index) {
-        ROS_INFO("exp4 target[%zu]=%s", index, target_configs[index].name.c_str());
+        "exp4 params: use_targets=%s, hover_z=%.2f, yaw=%.2f deg, settle=%.2f s, segment_time=(%.2f, %.2f, %.2f, return=%.2f), landing_z=%.2f, fixed_arm=(%.2f, %.2f, %.2f), target_timeout=%.2f, settle_takeoff_step=(xy %.3f, z %.3f), freeze_window=%.2f, freeze_motion=%.3f",
+        use_targets ? "true" : "false", hover_z, hover_yaw_deg, settle_time, approach_time,
+        pass_time, depart_time, return_time, landing_z, fixed_arm1_deg, fixed_arm2_deg,
+        fixed_hand_deg, target_pose_timeout_sec, settle_takeoff_step_limit_xy,
+        settle_takeoff_step_limit_z, freeze_window_sec, freeze_motion_threshold_m);
+    if (use_targets) {
+        for (std::size_t index = 0; index < target_configs.size(); ++index) {
+            ROS_INFO("exp4 target[%zu]=%s", index, target_configs[index].name.c_str());
+        }
+    } else {
+        ROS_INFO("exp4 loop mode: hover -> (+y %.2f) -> (+x %.2f) -> (-y %.2f) -> return hover -> final_hold",
+                 loop_offset_y_m, loop_offset_x_m, loop_offset_y_m);
     }
 
     ros::Rate rate(30.0);
@@ -677,7 +701,7 @@ int main(int argc, char *argv[]) {
     uav::xyz_yaw_d uav_pos_d;
     uav_pos_d.x_d = 0.0;
     uav_pos_d.y_d = 0.0;
-    uav_pos_d.z_d = hover_z;
+    uav_pos_d.z_d = 0.0;
     uav_pos_d.yaw_d = hover_yaw_deg;
     uav_pos_d.land_flag = false;
 
@@ -707,6 +731,7 @@ int main(int argc, char *argv[]) {
     bool last_safe_output_initialized = false;
     Vec3 safe_hover_output{0.0, 0.0, hover_z};
     Vec3 axis_move_goal_output{0.0, 0.0, hover_z};
+    std::vector<Vec3> loop_waypoints_output;
     MotionStage axis_move_followup_stage = MotionStage::kPass;
     FreezeWindowState freeze_window_state;
     int target_loss_count = 0;
@@ -771,6 +796,21 @@ int main(int argc, char *argv[]) {
         return false;
     };
 
+    auto ensure_loop_waypoints_initialized = [&]() {
+        if (!loop_waypoints_output.empty() || !hover_anchor_initialized) {
+            return;
+        }
+        // 无 target 验证模式：围绕初始悬停点飞一个简单闭环。
+        // 只验证起飞、限幅和 local pose 保护，不依赖外部 target 刚体。
+        loop_waypoints_output.push_back(
+            AddVec3(hover_anchor_output, Vec3{0.0, loop_offset_y_m, 0.0}));
+        loop_waypoints_output.push_back(
+            AddVec3(hover_anchor_output, Vec3{loop_offset_x_m, loop_offset_y_m, 0.0}));
+        loop_waypoints_output.push_back(
+            AddVec3(hover_anchor_output, Vec3{loop_offset_x_m, 0.0, 0.0}));
+        loop_waypoints_output.push_back(hover_anchor_output);
+    };
+
     auto enter_protection_state = [&](ProtectionState next_state, const std::string &reason) {
         if (protection_state == next_state) {
             return;
@@ -792,10 +832,10 @@ int main(int argc, char *argv[]) {
 
         const bool local_fresh = IsPoseFresh(g_local_pose, now, target_pose_timeout_sec);
         const bool base_world_fresh = IsPoseFresh(g_base_world_pose, now, target_pose_timeout_sec);
-        const bool all_target_fresh = all_targets_fresh(now);
-        bool current_target_fresh = false;
+        const bool all_target_fresh = use_targets ? all_targets_fresh(now) : true;
+        bool current_target_fresh = !use_targets;
         int current_target_index = -1;
-        if (visit_index < visit_sequence.size()) {
+        if (use_targets && visit_index < visit_sequence.size()) {
             current_target_index = visit_sequence[visit_index];
             current_target_fresh =
                 current_target_index >= 0 &&
@@ -815,6 +855,7 @@ int main(int argc, char *argv[]) {
             mapping_output_anchor = g_local_pose.position;
             frame_mapping_initialized = true;
             hover_anchor_initialized = true;
+            ensure_loop_waypoints_initialized();
             safe_hover_output = hover_anchor_output;
             last_safe_output_position = hover_anchor_output;
             last_safe_output_initialized = true;
@@ -852,10 +893,35 @@ int main(int argc, char *argv[]) {
 
         if (protection_state == ProtectionState::kNormal) {
             if (motion_stage == MotionStage::kSettle) {
-                if (hover_anchor_initialized) {
-                    next_uav_pos_d.x_d = hover_anchor_output.x;
-                    next_uav_pos_d.y_d = hover_anchor_output.y;
-                    next_uav_pos_d.z_d = hover_anchor_output.z;
+                // 起飞阶段分两步：
+                // 1. 还没建立 hover_anchor 前，先把期望锁在当前 local pose；
+                // 2. 建立 hover_anchor 后，再用独立的小步长限幅慢速抬升到 hover_z。
+                //
+                // 这样做是为了减小起飞瞬间的横向冲击：
+                // - 不在刚进入 offboard 时就发一个可能与当前位置有偏差的悬停点；
+                // - 先让飞机“原地稳住”；
+                // - 再慢慢升到实验悬停高度。
+                if (!hover_anchor_initialized) {
+                    if (local_fresh) {
+                        next_uav_pos_d.x_d = g_local_pose.position.x;
+                        next_uav_pos_d.y_d = g_local_pose.position.y;
+                        next_uav_pos_d.z_d = g_local_pose.position.z;
+                    } else {
+                        next_uav_pos_d.x_d = uav_pos_d.x_d;
+                        next_uav_pos_d.y_d = uav_pos_d.y_d;
+                        next_uav_pos_d.z_d = uav_pos_d.z_d;
+                    }
+                } else {
+                    // settle 段单独使用 settle_takeoff_step_limit_*，
+                    // 不复用主段路径的 base_step_limit_*，这样起飞上升会明显更保守。
+                    const Vec3 settle_goal_output = hover_anchor_output;
+                    const Vec3 limited_settle_output =
+                        LimitOutputReferenceStep(uav_pos_d, settle_goal_output,
+                                                 settle_takeoff_step_limit_xy,
+                                                 settle_takeoff_step_limit_z);
+                    next_uav_pos_d.x_d = limited_settle_output.x;
+                    next_uav_pos_d.y_d = limited_settle_output.y;
+                    next_uav_pos_d.z_d = limited_settle_output.z;
                 }
 
                 if (hover_anchor_initialized && local_fresh && base_world_fresh && all_target_fresh) {
@@ -865,7 +931,10 @@ int main(int argc, char *argv[]) {
                 }
 
                 if (stage_elapsed >= stage_duration(MotionStage::kSettle)) {
-                    if (!visit_sequence.empty() &&
+                    if (!use_targets && !loop_waypoints_output.empty()) {
+                        visit_index = 0;
+                        enter_motion_stage(MotionStage::kApproach);
+                    } else if (!visit_sequence.empty() &&
                         should_use_axis_first_to_target(-1, visit_sequence.front(), true)) {
                         const std::size_t target_index = static_cast<std::size_t>(visit_sequence.front());
                         const Vec3 target_goal_world =
@@ -888,7 +957,8 @@ int main(int argc, char *argv[]) {
                     (motion_stage == MotionStage::kAxisMoveY || motion_stage == MotionStage::kAxisMoveX) &&
                     axis_move_followup_stage == MotionStage::kLanding;
                 freshness_fault = !local_fresh || !frame_mapping_initialized ||
-                                 (!returning_without_target &&
+                                 (use_targets &&
+                                  !returning_without_target &&
                                   motion_stage != MotionStage::kReturnHover &&
                                   !current_target_fresh);
 
@@ -923,7 +993,7 @@ int main(int argc, char *argv[]) {
                         } else {
                             stage_goal_output.z = segment_start_output.z;
                         }
-                    } else {
+                    } else if (use_targets) {
                         const std::size_t target_index = static_cast<std::size_t>(current_target_index);
                         const MotionStage target_stage =
                             motion_stage == MotionStage::kApproach ? MotionStage::kApproach : motion_stage;
@@ -931,6 +1001,8 @@ int main(int argc, char *argv[]) {
                         stage_goal_output =
                             MapWorldToOutputFrame(target_goal_world, frame_mapping_initialized,
                                                   mapping_world_anchor, mapping_output_anchor);
+                    } else if (visit_index < loop_waypoints_output.size()) {
+                        stage_goal_output = loop_waypoints_output[visit_index];
                     }
 
                     if (!segment_start_initialized) {
@@ -1013,7 +1085,16 @@ int main(int argc, char *argv[]) {
                         } else if (motion_stage == MotionStage::kAxisMoveX) {
                             enter_motion_stage(axis_move_followup_stage);
                         } else if (motion_stage == MotionStage::kApproach) {
-                            enter_motion_stage(MotionStage::kPass);
+                            if (!use_targets) {
+                                if (visit_index + 1 < loop_waypoints_output.size()) {
+                                    ++visit_index;
+                                    enter_motion_stage(MotionStage::kApproach);
+                                } else {
+                                    enter_motion_stage(MotionStage::kFinalHold);
+                                }
+                            } else {
+                                enter_motion_stage(MotionStage::kPass);
+                            }
                         } else if (motion_stage == MotionStage::kPass) {
                             enter_motion_stage(MotionStage::kDepart);
                         } else if (motion_stage == MotionStage::kDepart) {
@@ -1090,15 +1171,17 @@ int main(int argc, char *argv[]) {
 
         if ((now - last_log_time).toSec() >= 1.0) {
             last_log_time = now;
-            std::string target_name = "n/a";
-            if (current_target_index >= 0 &&
+            std::string target_name = use_targets ? "n/a" : "loop";
+            if (use_targets &&
+                current_target_index >= 0 &&
                 static_cast<std::size_t>(current_target_index) < target_names.size()) {
                 target_name = target_names[static_cast<std::size_t>(current_target_index)];
             }
+            const std::size_t total_visits = use_targets ? visit_sequence.size() : loop_waypoints_output.size();
             ROS_INFO(
                 "[%s|%s] t=%.2f s, visit=%zu/%zu, target=%s, pose_d=(%.2f, %.2f, %.2f, %.2f), arm_d=(%.2f, %.2f, %.2f), local_fresh=%s, base_world_fresh=%s, current_target_fresh=%s, target_loss=%d, freeze_fault=%d, safety_escalate=%d",
                 MotionStageName(motion_stage), ProtectionStateName(protection_state), elapsed,
-                visit_index + 1, visit_sequence.size(), target_name.c_str(),
+                visit_index + 1, total_visits, target_name.c_str(),
                 next_uav_pos_d.x_d, next_uav_pos_d.y_d, next_uav_pos_d.z_d, next_uav_pos_d.yaw_d,
                 next_angle.arm1_angle, next_angle.arm2_angle, next_angle.hand_angle,
                 local_fresh ? "true" : "false",
