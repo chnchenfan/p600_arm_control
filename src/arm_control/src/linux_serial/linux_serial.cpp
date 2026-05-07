@@ -22,6 +22,8 @@ std::size_t ExpectedFrameLength(uint8_t function_code) {
         case 0x43:
             return 31;
         case 0xFD:
+        case 0xF3:
+        case 0x0E:
             return 4;
         case 0x36:
             return 8;
@@ -152,6 +154,8 @@ sp(iosev, usb_name),servers(nh)
         iosev.run();
         ROS_INFO("IO thread exited");
     });
+
+    Send_startup_recovery_commands();
 }
 Linux_serial::~Linux_serial(){
 }
@@ -165,6 +169,40 @@ void Linux_serial::Send_data(uint8_t *data,int len)
     // 使用boost库中的write函数发送数据
     boost::asio::write(sp, boost::asio::buffer(data,len));
 }
+
+void Linux_serial::Send_startup_recovery_commands()
+{
+    bool reset_protection = true;
+    bool enable_motor = true;
+    ros::NodeHandle nh;
+    nh.param("arm_serial_startup_reset_protection", reset_protection, reset_protection);
+    nh.param("arm_serial_startup_enable", enable_motor, enable_motor);
+
+    if (!reset_protection && !enable_motor) {
+        return;
+    }
+
+    ROS_INFO("serial startup recovery: reset_protection=%s, enable=%s",
+             reset_protection ? "true" : "false",
+             enable_motor ? "true" : "false");
+
+    for (uint8_t addr = 1; addr <= 3; ++addr) {
+        if (reset_protection) {
+            uint8_t reset_clog_pro[] = {addr, 0x0E, 0x52, kFrameTail};
+            Send_data(reset_clog_pro, sizeof(reset_clog_pro));
+            ros::Duration(command_gap_sec).sleep();
+        }
+
+        if (enable_motor) {
+            uint8_t enable[] = {addr, 0xF3, 0xAB, 0x01, 0x00, kFrameTail};
+            Send_data(enable, sizeof(enable));
+            ros::Duration(command_gap_sec).sleep();
+        }
+    }
+
+    ros::Duration(0.05).sleep();
+}
+
 /**
   * @brief 发送所有串口信息
 */
@@ -441,6 +479,17 @@ void Linux_serial::handle_valid_frame(const std::vector<uint8_t>& frame)
         //                   DriverTagFromAddr(frame[0]),
         //                   static_cast<unsigned>(frame[2]),
         //                   BytesToHexPreview(frame).c_str());
+        return;
+    }
+
+    if ((function_code == 0xF3 || function_code == 0x0E) && frame_size == 4 && frame[3] == kFrameTail) {
+        last_ack_frame_time = now;
+        last_ack_frame_time_by_addr[frame[0]] = now;
+        ROS_INFO("%s %s应答: 应答码=0x%02x, 原始预览=%s",
+                 DriverTagFromAddr(frame[0]),
+                 (function_code == 0xF3) ? "使能" : "解除保护",
+                 static_cast<unsigned>(frame[2]),
+                 BytesToHexPreview(frame).c_str());
         return;
     }
 

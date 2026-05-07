@@ -38,4 +38,5 @@ private:
     void handle_read(const boost::system::error_code& error, size_t bytes_transferred);
     void process_rx_data();
     void handle_valid_frame(const std::vector<uint8_t>& frame);
+    void Send_startup_recovery_commands();
 };
