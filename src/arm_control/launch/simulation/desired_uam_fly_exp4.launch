@@ -6,7 +6,7 @@
         <param name="hover_z" value="1.0" />
         <param name="hover_yaw_deg" value="0.0" />
         <!-- false 时不追 target，只围绕初始悬停点飞一个简单闭环，用于先验证起飞、链路和保护 -->
-        <param name="use_targets" value="flase" />
+        <param name="use_targets" value="false" />
         <!-- ==========================================状态机切换的时间间隔=============================================== -->
         <!-- 
             起飞后流程是：settle => axis_move_y => axis_move_x => target1(pass -> depart,+x 2cm)
