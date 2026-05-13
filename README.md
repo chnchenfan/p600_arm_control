@@ -63,10 +63,10 @@ These nodes consume `/wjl/arm/guidefly/angle_d` and publish:
 
 5. Logging and post-processing
 
-- `shell/Experiment/record_experiment1_data.sh`
-- `shell/Experiment/record_experiment2_data.sh`
-- `shell/Experiment/record_experiment3_data.sh`
-- `shell/Experiment/record_experiment4_data.sh`
+- `shell/Experiment/record_experiment_data.sh exp1`
+- `shell/Experiment/record_experiment_data.sh exp2`
+- `shell/Experiment/record_experiment_data.sh exp3`
+- `shell/Experiment/record_experiment_data.sh exp4`
 
 Offline plotting scripts:
 
@@ -87,7 +87,7 @@ Goal:
 Main entrypoints:
 - Control node: `src/arm_control/src/uam_desired.cpp`
 - Combined startup: `shell/Experiment/uam_control_desired.sh`
-- Recording: `shell/Experiment/record_experiment1_data.sh`
+- Recording: `shell/Experiment/record_experiment_data.sh exp1`
 - Plotting: `shell/Plot/plot_experiment1.py`
 
 ### Experiment 2: Circular base motion with end-effector hold compensation
@@ -101,7 +101,7 @@ Main entrypoints:
 - Arm-side startup: `src/arm_control/shell/desired_uam_fly_exp2.sh`
 - Combined startup: `shell/Experiment/uam_control_desired_exp2.sh`
 - Static ground IK test: `shell/Experiment/uam_control_desired_exp2_static_ik.sh`
-- Recording: `shell/Experiment/record_experiment2_data.sh`
+- Recording: `shell/Experiment/record_experiment_data.sh exp2`
 - Plotting: `shell/Plot/plot_experiment2.py`
 
 ### Experiment 3: Square base motion with periodic arm motion
@@ -115,7 +115,7 @@ Main entrypoints:
 - Control node: `src/arm_control/src/uam_desired_exp3.cpp`
 - Arm-side startup: `src/arm_control/shell/desired_uam_fly_exp3.sh`
 - Combined startup: `shell/Experiment/uam_control_desired_exp3.sh`
-- Recording: `shell/Experiment/record_experiment3_data.sh`
+- Recording: `shell/Experiment/record_experiment_data.sh exp3`
 - Plotting: `shell/Plot/plot_experiment3.py`
 
 ### Experiment 4: Aerial ring passage
@@ -130,7 +130,7 @@ Main entrypoints:
 - Control node: `src/arm_control/src/uam_desired_exp4.cpp`
 - Arm-side startup: `src/arm_control/shell/desired_uam_fly_exp4.sh`
 - Combined startup: `shell/Experiment/uam_control_desired_exp4.sh`
-- Recording: `shell/Experiment/record_experiment4_data.sh`
+- Recording: `shell/Experiment/record_experiment_data.sh exp4`
 - Plotting: `shell/Plot/plot_experiment4.py`
 
 Additional experiment 4 inputs:
@@ -231,10 +231,10 @@ GitHub: <https://github.com/chnchenfan/p600_arm_control>
 
 5. 数据记录与复盘
 
-- `shell/Experiment/record_experiment1_data.sh`
-- `shell/Experiment/record_experiment2_data.sh`
-- `shell/Experiment/record_experiment3_data.sh`
-- `shell/Experiment/record_experiment4_data.sh`
+- `shell/Experiment/record_experiment_data.sh exp1`
+- `shell/Experiment/record_experiment_data.sh exp2`
+- `shell/Experiment/record_experiment_data.sh exp3`
+- `shell/Experiment/record_experiment_data.sh exp4`
 
 配套离线绘图:
 
@@ -255,7 +255,7 @@ GitHub: <https://github.com/chnchenfan/p600_arm_control>
 主要入口:
 - 控制节点: `src/arm_control/src/uam_desired.cpp`
 - 联合启动: `shell/Experiment/uam_control_desired.sh`
-- 录包: `shell/Experiment/record_experiment1_data.sh`
+- 录包: `shell/Experiment/record_experiment_data.sh exp1`
 - 绘图: `shell/Plot/plot_experiment1.py`
 
 ### 实验 2: `arm_base/arm_target` 全姿态末端定点补偿
@@ -270,7 +270,7 @@ GitHub: <https://github.com/chnchenfan/p600_arm_control>
 - 控制节点: `src/arm_control/src/uam_desired_exp2.cpp`
 - 机械臂启动: `src/arm_control/shell/desired_uam_fly_exp2.sh`
 - 联合启动: `shell/Experiment/uam_control_desired_exp2.sh`
-- 录包: `shell/Experiment/record_experiment2_data.sh`
+- 录包: `shell/Experiment/record_experiment_data.sh exp2`
 - 绘图: `shell/Plot/plot_experiment2.py`
 
 ### 实验 3: 基座方形轨迹 + 机械臂周期运动
@@ -284,7 +284,7 @@ GitHub: <https://github.com/chnchenfan/p600_arm_control>
 - 控制节点: `src/arm_control/src/uam_desired_exp3.cpp`
 - 机械臂启动: `src/arm_control/shell/desired_uam_fly_exp3.sh`
 - 联合启动: `shell/Experiment/uam_control_desired_exp3.sh`
-- 录包: `shell/Experiment/record_experiment3_data.sh`
+- 录包: `shell/Experiment/record_experiment_data.sh exp3`
 - 绘图: `shell/Plot/plot_experiment3.py`
 
 ### 实验 4: 空中穿环
@@ -299,7 +299,7 @@ GitHub: <https://github.com/chnchenfan/p600_arm_control>
 - 控制节点: `src/arm_control/src/uam_desired_exp4.cpp`
 - 机械臂启动: `src/arm_control/shell/desired_uam_fly_exp4.sh`
 - 联合启动: `shell/Experiment/uam_control_desired_exp4.sh`
-- 录包: `shell/Experiment/record_experiment4_data.sh`
+- 录包: `shell/Experiment/record_experiment_data.sh exp4`
 - 绘图: `shell/Plot/plot_experiment4.py`
 
 实验四额外输入:
