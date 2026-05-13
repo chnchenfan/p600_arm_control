@@ -81,6 +81,12 @@ struct FreezeWindowState {
     Vec3 position{0.0, 0.0, 0.0};
 };
 
+struct TdState {
+    bool initialized = false;
+    Vec3 position{0.0, 0.0, 0.0};
+    Vec3 velocity{0.0, 0.0, 0.0};
+};
+
 struct MavrosStateCache {
     bool valid = false;
     bool connected = false;
@@ -176,6 +182,42 @@ double QuaternionToYaw(double x, double y, double z, double w) {
 double QuinticBlend(double ratio) {
     const double x = Clamp(ratio, 0.0, 1.0);
     return x * x * x * (10.0 + x * (-15.0 + 6.0 * x));
+}
+
+void ResetTd(TdState &td, const Vec3 &position) {
+    td.initialized = true;
+    td.position = position;
+    td.velocity = {0.0, 0.0, 0.0};
+}
+
+void UpdateTdAxis(double target, double dt, double bandwidth_rad_s, double accel_limit,
+                  double vel_limit, double &position, double &velocity) {
+    if (dt <= 0.0) {
+        return;
+    }
+
+    const double error = target - position;
+    double acceleration = bandwidth_rad_s * bandwidth_rad_s * error -
+                          2.0 * bandwidth_rad_s * velocity;
+    acceleration = Clamp(acceleration, -accel_limit, accel_limit);
+    velocity = Clamp(velocity + acceleration * dt, -vel_limit, vel_limit);
+    position += velocity * dt;
+}
+
+void UpdateTd(TdState &td, const Vec3 &target, double dt, double bandwidth_rad_s,
+              double accel_limit_xy, double accel_limit_z, double vel_limit_xy,
+              double vel_limit_z) {
+    if (!td.initialized) {
+        ResetTd(td, target);
+        return;
+    }
+
+    UpdateTdAxis(target.x, dt, bandwidth_rad_s, accel_limit_xy, vel_limit_xy,
+                 td.position.x, td.velocity.x);
+    UpdateTdAxis(target.y, dt, bandwidth_rad_s, accel_limit_xy, vel_limit_xy,
+                 td.position.y, td.velocity.y);
+    UpdateTdAxis(target.z, dt, bandwidth_rad_s, accel_limit_z, vel_limit_z,
+                 td.position.z, td.velocity.z);
 }
 
 bool IsPoseFresh(const PoseState &pose, const ros::Time &now, double timeout_sec) {
@@ -420,6 +462,24 @@ int main(int argc, char *argv[]) {
     double output_step_limit_z = 0.02;
     double settle_takeoff_step_limit_xy = 0.01;
     double settle_takeoff_step_limit_z = 0.01;
+    // ============================================= TD慢参考生成器 =============================================
+    // use_td_reference:
+    //   true 时，位置期望先经过 TD 平滑；false 时只使用原来的 step limit 限幅。
+    //
+    // td_bandwidth_hz:
+    //   TD 的等效带宽，越小参考越慢越柔；起飞仍晃时优先降到 0.18。
+    //
+    // td_accel_limit_xy / td_accel_limit_z:
+    //   x/y 和 z 方向参考加速度上限，单位 m/s^2；值越小，给内环的指令变化越柔。
+    //
+    // td_vel_limit_xy / td_vel_limit_z:
+    //   x/y 和 z 方向参考速度上限，单位 m/s；exp4 任务段也会受这个速度上限约束。
+    bool use_td_reference = true;
+    double td_bandwidth_hz = 0.22;
+    double td_accel_limit_xy = 0.10;
+    double td_accel_limit_z = 0.08;
+    double td_vel_limit_xy = 0.12;
+    double td_vel_limit_z = 0.10;
     double fixed_arm1_deg = 0.0;
     double fixed_arm2_deg = 0.0;
     double fixed_hand_deg = 25.0;
@@ -457,6 +517,12 @@ int main(int argc, char *argv[]) {
     pnh.param("base_step_limit_z", output_step_limit_z, output_step_limit_z);
     pnh.param("settle_takeoff_step_limit_xy", settle_takeoff_step_limit_xy, settle_takeoff_step_limit_xy);
     pnh.param("settle_takeoff_step_limit_z", settle_takeoff_step_limit_z, settle_takeoff_step_limit_z);
+    pnh.param("use_td_reference", use_td_reference, use_td_reference);
+    pnh.param("td_bandwidth_hz", td_bandwidth_hz, td_bandwidth_hz);
+    pnh.param("td_accel_limit_xy", td_accel_limit_xy, td_accel_limit_xy);
+    pnh.param("td_accel_limit_z", td_accel_limit_z, td_accel_limit_z);
+    pnh.param("td_vel_limit_xy", td_vel_limit_xy, td_vel_limit_xy);
+    pnh.param("td_vel_limit_z", td_vel_limit_z, td_vel_limit_z);
     pnh.param("fixed_arm1_deg", fixed_arm1_deg, fixed_arm1_deg);
     pnh.param("fixed_arm2_deg", fixed_arm2_deg, fixed_arm2_deg);
     pnh.param("fixed_hand_deg", fixed_hand_deg, fixed_hand_deg);
@@ -506,6 +572,21 @@ int main(int argc, char *argv[]) {
     }
     if (settle_takeoff_step_limit_z <= 0.0) {
         settle_takeoff_step_limit_z = 0.01;
+    }
+    if (td_bandwidth_hz <= 0.0) {
+        td_bandwidth_hz = 0.22;
+    }
+    if (td_accel_limit_xy <= 0.0) {
+        td_accel_limit_xy = 0.10;
+    }
+    if (td_accel_limit_z <= 0.0) {
+        td_accel_limit_z = 0.08;
+    }
+    if (td_vel_limit_xy <= 0.0) {
+        td_vel_limit_xy = 0.12;
+    }
+    if (td_vel_limit_z <= 0.0) {
+        td_vel_limit_z = 0.10;
     }
     if (freeze_window_sec <= 0.0) {
         freeze_window_sec = 1.0;
@@ -610,6 +691,10 @@ int main(int argc, char *argv[]) {
         pass_time, depart_time, return_time, landing_z, fixed_arm1_deg, fixed_arm2_deg,
         fixed_hand_deg, target_pose_timeout_sec, settle_takeoff_step_limit_xy,
         settle_takeoff_step_limit_z, freeze_window_sec, freeze_motion_threshold_m);
+    ROS_INFO(
+        "exp4 TD: enabled=%s, bw=%.2f Hz, acc_xy=%.3f, acc_z=%.3f, vel_xy=%.3f, vel_z=%.3f",
+        use_td_reference ? "true" : "false", td_bandwidth_hz, td_accel_limit_xy,
+        td_accel_limit_z, td_vel_limit_xy, td_vel_limit_z);
     if (use_targets) {
         for (std::size_t index = 0; index < target_configs.size(); ++index) {
             ROS_INFO("exp4 target[%zu]=%s", index, target_configs[index].name.c_str());
@@ -697,6 +782,7 @@ int main(int argc, char *argv[]) {
     const ros::Time experiment_start = ros::Time::now();
     ros::Time last_loop_time = experiment_start;
     ros::Time last_log_time = experiment_start - ros::Duration(1.0);
+    const double td_bandwidth_rad_s = 2.0 * std::acos(-1.0) * td_bandwidth_hz;
 
     uav::xyz_yaw_d uav_pos_d;
     uav_pos_d.x_d = 0.0;
@@ -734,6 +820,7 @@ int main(int argc, char *argv[]) {
     std::vector<Vec3> loop_waypoints_output;
     MotionStage axis_move_followup_stage = MotionStage::kPass;
     FreezeWindowState freeze_window_state;
+    TdState reference_td;
     int target_loss_count = 0;
     int freeze_fault_count = 0;
     int safety_escalate_count = 0;
@@ -859,9 +946,10 @@ int main(int argc, char *argv[]) {
             safe_hover_output = hover_anchor_output;
             last_safe_output_position = hover_anchor_output;
             last_safe_output_initialized = true;
-            uav_pos_d.x_d = hover_anchor_output.x;
-            uav_pos_d.y_d = hover_anchor_output.y;
-            uav_pos_d.z_d = hover_anchor_output.z;
+            ResetTd(reference_td, g_local_pose.position);
+            uav_pos_d.x_d = g_local_pose.position.x;
+            uav_pos_d.y_d = g_local_pose.position.y;
+            uav_pos_d.z_d = g_local_pose.position.z;
         }
 
         if (motion_stage != last_logged_stage) {
@@ -1163,6 +1251,27 @@ int main(int argc, char *argv[]) {
                 (now - protection_state_start).toSec() >= 0.5) {
                 break;
             }
+        }
+
+        const bool td_allowed =
+            use_td_reference &&
+            protection_state == ProtectionState::kNormal &&
+            motion_stage != MotionStage::kLanding &&
+            !next_uav_pos_d.land_flag;
+        if (td_allowed) {
+            const Vec3 raw_reference{next_uav_pos_d.x_d, next_uav_pos_d.y_d, next_uav_pos_d.z_d};
+            if (!reference_td.initialized && local_fresh) {
+                ResetTd(reference_td, g_local_pose.position);
+            }
+            UpdateTd(reference_td, raw_reference, dt, td_bandwidth_rad_s,
+                     td_accel_limit_xy, td_accel_limit_z, td_vel_limit_xy, td_vel_limit_z);
+            next_uav_pos_d.x_d = reference_td.position.x;
+            next_uav_pos_d.y_d = reference_td.position.y;
+            next_uav_pos_d.z_d = reference_td.position.z;
+        } else if (!use_td_reference &&
+                   protection_state == ProtectionState::kNormal &&
+                   motion_stage != MotionStage::kLanding) {
+            ResetTd(reference_td, Vec3{next_uav_pos_d.x_d, next_uav_pos_d.y_d, next_uav_pos_d.z_d});
         }
 
         next_angle.arm1_angle = Clamp(next_angle.arm1_angle, arm1_min, arm1_max);

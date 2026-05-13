@@ -56,6 +56,14 @@ arm_branch=$ARM_BRANCH
 uav_branch=$UAV_BRANCH
 bag_path=$BAG_PATH
 monitor_log=$MONITOR_PATH
+rigid_body_topic=/vrpn_client_node/arm_base/pose
+uav_desired_topic=/wjl/guidefly/pose_d
+uav_setpoint_topic=/mavros/setpoint_raw/local
+uav_actual_topic=/mavros/local_position/pose
+arm_raw_desired_topic=/wjl/arm/guidefly/angle_d
+arm_limited_desired_topic=/wjl/arm/real/angle_d
+arm_actual_topic=/wjl/arm/real/angle_r
+arm_error_topic=/wjl/arm/real/angle_error
 EOF
 
 echo "Experiment 3 record output: $OUTPUT_DIR"
@@ -90,7 +98,7 @@ trap cleanup EXIT INT TERM
 if [ -f "$MONITOR_SCRIPT" ] && command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   rostopic echo -p /wjl/guidefly/pose_d > "$DESIRED_TMP" &
   MONITOR_PIDS="$MONITOR_PIDS $!"
-  rostopic echo -p /vrpn_client_node/Tracker0/pose > "$VRPN_TMP" &
+  rostopic echo -p /vrpn_client_node/arm_base/pose > "$VRPN_TMP" &
   MONITOR_PIDS="$MONITOR_PIDS $!"
   rostopic echo -p /mavros/local_position/pose > "$MAVROS_TMP" &
   MONITOR_PIDS="$MONITOR_PIDS $!"
@@ -102,12 +110,13 @@ else
 fi
 
 rosbag record -O "$BAG_PATH" \
-  /vrpn_client_node/Tracker0/pose \
+  /vrpn_client_node/arm_base/pose \
   /mavros/local_position/pose \
   /mavros/vision_pose/pose \
   /mavros/state \
   /mavros/setpoint_raw/local \
   /wjl/guidefly/pose_d \
   /wjl/arm/guidefly/angle_d \
+  /wjl/arm/real/angle_d \
   /wjl/arm/real/angle_r \
   /wjl/arm/real/angle_error

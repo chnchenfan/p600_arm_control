@@ -35,6 +35,12 @@ struct FreezeWindowState {
     Vec3 position{0.0, 0.0, 0.0};
 };
 
+struct TdState {
+    bool initialized = false;
+    Vec3 position{0.0, 0.0, 0.0};
+    Vec3 velocity{0.0, 0.0, 0.0};
+};
+
 struct MavrosStateCache {
     bool valid = false;
     bool connected = false;
@@ -66,6 +72,42 @@ Vec3 SubVec3(const Vec3 &lhs, const Vec3 &rhs) {
 
 double NormVec3(const Vec3 &value) {
     return std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
+}
+
+void ResetTd(TdState &td, const Vec3 &position) {
+    td.initialized = true;
+    td.position = position;
+    td.velocity = {0.0, 0.0, 0.0};
+}
+
+void UpdateTdAxis(double target, double dt, double bandwidth_rad_s, double accel_limit,
+                  double vel_limit, double &position, double &velocity) {
+    if (dt <= 0.0) {
+        return;
+    }
+
+    const double error = target - position;
+    double acceleration = bandwidth_rad_s * bandwidth_rad_s * error -
+                          2.0 * bandwidth_rad_s * velocity;
+    acceleration = Clamp(acceleration, -accel_limit, accel_limit);
+    velocity = Clamp(velocity + acceleration * dt, -vel_limit, vel_limit);
+    position += velocity * dt;
+}
+
+void UpdateTd(TdState &td, const Vec3 &target, double dt, double bandwidth_rad_s,
+              double accel_limit_xy, double accel_limit_z, double vel_limit_xy,
+              double vel_limit_z) {
+    if (!td.initialized) {
+        ResetTd(td, target);
+        return;
+    }
+
+    UpdateTdAxis(target.x, dt, bandwidth_rad_s, accel_limit_xy, vel_limit_xy,
+                 td.position.x, td.velocity.x);
+    UpdateTdAxis(target.y, dt, bandwidth_rad_s, accel_limit_xy, vel_limit_xy,
+                 td.position.y, td.velocity.y);
+    UpdateTdAxis(target.z, dt, bandwidth_rad_s, accel_limit_z, vel_limit_z,
+                 td.position.z, td.velocity.z);
 }
 
 bool IsPoseFresh(const PoseState &pose, const ros::Time &now, double timeout_sec) {
@@ -153,8 +195,7 @@ int main(int argc, char *argv[]) {
     ros::Subscriber mavros_state_sub =
         nh.subscribe<mavros_msgs::State>("/mavros/state", 10, MavrosStateCb);
 
-    double hover_x = 0.0;
-    double hover_y = 0.0;
+    // exp1 慢起飞模式下，启动后会用当前 /mavros/local_position/pose 的 x/y 作为水平锚点，只追 z 到 hover_z。
     double hover_z = 1.0;
     double hover_yaw_deg = 0.0;
     double settle_time = 3.0;
@@ -172,6 +213,33 @@ int main(int argc, char *argv[]) {
     double arm2_phase_deg = 0.0;
     double arm2_sign = 1.0;
     double hand_hold_deg = 0.0;
+    // ============================================= TD慢参考生成器 =============================================
+    // use_td_reference:
+    //   true 时，位置期望先经过 TD 平滑；false 时直接发布 raw target。
+    //
+    // td_bandwidth_hz:
+    //   TD 的等效带宽，越小参考越慢越柔；起飞仍晃时优先降到 0.18。
+    //
+    // td_accel_limit_xy / td_accel_limit_z:
+    //   x/y 和 z 方向参考加速度上限，单位 m/s^2；值越小，给内环的指令变化越柔。
+    //
+    // td_vel_limit_xy / td_vel_limit_z:
+    //   x/y 和 z 方向参考速度上限，单位 m/s；起飞太慢但误差小，可只提高 td_vel_limit_z。
+    //
+    // settle_reach_xy_m / settle_reach_z_m:
+    //   settle 完成判据，实际位置与当前 TD 期望的水平/高度误差阈值，单位 m。
+    //
+    // settle_min_hold_s:
+    //   进入误差阈值后至少稳定保持这么久，才允许进入机械臂扰动阶段，单位 s。
+    bool use_td_reference = true;
+    double td_bandwidth_hz = 0.22;
+    double td_accel_limit_xy = 0.10;
+    double td_accel_limit_z = 0.08;
+    double td_vel_limit_xy = 0.12;
+    double td_vel_limit_z = 0.10;
+    double settle_reach_xy_m = 0.12;
+    double settle_reach_z_m = 0.10;
+    double settle_min_hold_s = 2.0;
 
     // =============================================位置更新的新鲜度保护================================================
     // pose_timeout_sec:
@@ -220,11 +288,7 @@ int main(int argc, char *argv[]) {
     double safety_hold_arm2_deg = 0.0;
     double safety_hold_hand_deg = 0.0;
 
-    nh.param("/wjl/uam/hover_x", hover_x, hover_x);
-    nh.param("/wjl/uam/hover_y", hover_y, hover_y);
     nh.param("/wjl/uam/hover_z", hover_z, hover_z);
-    pnh.param("hover_x", hover_x, hover_x);
-    pnh.param("hover_y", hover_y, hover_y);
     pnh.param("hover_z", hover_z, hover_z);
     pnh.param("hover_yaw_deg", hover_yaw_deg, hover_yaw_deg);
     pnh.param("settle_time", settle_time, settle_time);
@@ -242,6 +306,15 @@ int main(int argc, char *argv[]) {
     pnh.param("arm2_phase_deg", arm2_phase_deg, arm2_phase_deg);
     pnh.param("arm2_sign", arm2_sign, arm2_sign);
     pnh.param("hand_hold_deg", hand_hold_deg, hand_hold_deg);
+    pnh.param("use_td_reference", use_td_reference, use_td_reference);
+    pnh.param("td_bandwidth_hz", td_bandwidth_hz, td_bandwidth_hz);
+    pnh.param("td_accel_limit_xy", td_accel_limit_xy, td_accel_limit_xy);
+    pnh.param("td_accel_limit_z", td_accel_limit_z, td_accel_limit_z);
+    pnh.param("td_vel_limit_xy", td_vel_limit_xy, td_vel_limit_xy);
+    pnh.param("td_vel_limit_z", td_vel_limit_z, td_vel_limit_z);
+    pnh.param("settle_reach_xy_m", settle_reach_xy_m, settle_reach_xy_m);
+    pnh.param("settle_reach_z_m", settle_reach_z_m, settle_reach_z_m);
+    pnh.param("settle_min_hold_s", settle_min_hold_s, settle_min_hold_s);
     pnh.param("pose_timeout_sec", pose_timeout_sec, pose_timeout_sec);
     pnh.param("pose_loss_limit", pose_loss_limit, pose_loss_limit);
     pnh.param("freeze_window_sec", freeze_window_sec, freeze_window_sec);
@@ -265,6 +338,30 @@ int main(int argc, char *argv[]) {
     }
     if (settle_time < 0.0) {
         settle_time = 0.0;
+    }
+    if (td_bandwidth_hz <= 0.0) {
+        td_bandwidth_hz = 0.22;
+    }
+    if (td_accel_limit_xy <= 0.0) {
+        td_accel_limit_xy = 0.10;
+    }
+    if (td_accel_limit_z <= 0.0) {
+        td_accel_limit_z = 0.08;
+    }
+    if (td_vel_limit_xy <= 0.0) {
+        td_vel_limit_xy = 0.12;
+    }
+    if (td_vel_limit_z <= 0.0) {
+        td_vel_limit_z = 0.10;
+    }
+    if (settle_reach_xy_m <= 0.0) {
+        settle_reach_xy_m = 0.12;
+    }
+    if (settle_reach_z_m <= 0.0) {
+        settle_reach_z_m = 0.10;
+    }
+    if (settle_min_hold_s < 0.0) {
+        settle_min_hold_s = 0.0;
     }
     if (experiment_time < 0.0) {
         experiment_time = 0.0;
@@ -322,9 +419,15 @@ int main(int argc, char *argv[]) {
 
     ROS_INFO("服务已经启动，等待实验触发....");
     ROS_INFO(
-        "uam_desired params: hover=(%.2f, %.2f, %.2f), yaw=%.2f deg, settle=%.2f s, exp=%.2f s, recovery=%.2f s, pose_timeout=%.2f s, pose_loss_limit=%d, freeze_window=%.2f s",
-        hover_x, hover_y, hover_z, hover_yaw_deg, settle_time, experiment_time, recovery_time,
+        "uam_desired params: hover_z=%.2f, yaw=%.2f deg, settle=%.2f s, exp=%.2f s, recovery=%.2f s, pose_timeout=%.2f s, pose_loss_limit=%d, freeze_window=%.2f s",
+        hover_z, hover_yaw_deg, settle_time, experiment_time, recovery_time,
         pose_timeout_sec, pose_loss_limit, freeze_window_sec);
+    ROS_INFO("exp1 slow takeoff: x/y will anchor at current local pose; only z tracks hover_z");
+    ROS_INFO(
+        "uam_desired TD: enabled=%s, bw=%.2f Hz, acc_xy=%.3f, acc_z=%.3f, vel_xy=%.3f, vel_z=%.3f, settle_reach=(xy %.3f, z %.3f), settle_hold=%.2f s",
+        use_td_reference ? "true" : "false", td_bandwidth_hz, td_accel_limit_xy,
+        td_accel_limit_z, td_vel_limit_xy, td_vel_limit_z, settle_reach_xy_m,
+        settle_reach_z_m, settle_min_hold_s);
 
     ros::Rate rate(30.0);
     while (ros::ok() && !start_flag) {
@@ -337,11 +440,29 @@ int main(int argc, char *argv[]) {
 
     std::cout << "开始发送期望数据：" << std::endl;
 
+    while (ros::ok() && !IsPoseFresh(g_local_pose, ros::Time::now(), pose_timeout_sec)) {
+        ROS_WARN_THROTTLE(1.0, "exp1 waiting for fresh local pose before TD initialization");
+        ros::spinOnce();
+        rate.sleep();
+    }
+    if (!ros::ok()) {
+        return 0;
+    }
+
+    const Vec3 takeoff_initial_position = g_local_pose.position;
+    const Vec3 takeoff_hover_target{takeoff_initial_position.x, takeoff_initial_position.y, hover_z};
+    ROS_INFO("exp1 takeoff anchor: current local=(%.3f, %.3f, %.3f), target=(%.3f, %.3f, %.3f)",
+             takeoff_initial_position.x, takeoff_initial_position.y, takeoff_initial_position.z,
+             takeoff_hover_target.x, takeoff_hover_target.y, takeoff_hover_target.z);
+    const double td_bandwidth_rad_s = 2.0 * std::acos(-1.0) * td_bandwidth_hz;
+    TdState td;
+    ResetTd(td, takeoff_initial_position);
+
     uav::xyz_yaw_d uav_pos_d;
     uam_message::arm_angle current_angle;
-    uav_pos_d.x_d = hover_x;
-    uav_pos_d.y_d = hover_y;
-    uav_pos_d.z_d = hover_z;
+    uav_pos_d.x_d = takeoff_initial_position.x;
+    uav_pos_d.y_d = takeoff_initial_position.y;
+    uav_pos_d.z_d = takeoff_initial_position.z;
     uav_pos_d.yaw_d = hover_yaw_deg;
     uav_pos_d.land_flag = false;
     current_angle.arm1_angle = arm1_offset_deg;
@@ -354,10 +475,14 @@ int main(int argc, char *argv[]) {
     const double arm1_phase_rad = DegToRad(arm1_phase_deg);
     const double arm2_phase_rad = DegToRad(arm2_phase_deg);
     const ros::Time experiment_start = ros::Time::now();
+    ros::Time last_loop_time = experiment_start;
     ros::Time last_log_time = experiment_start - ros::Duration(1.0);
 
     bool protection_triggered = false;
     bool safety_landing_triggered = false;
+    bool settle_complete = false;
+    ros::Time settle_reached_since;
+    ros::Time post_settle_start;
     ros::Time protection_state_start;
     std::string protection_reason = "none";
     int pose_loss_count = 0;
@@ -400,6 +525,8 @@ int main(int argc, char *argv[]) {
         ros::spinOnce();
 
         const ros::Time now = ros::Time::now();
+        const double dt = std::max(0.0, (now - last_loop_time).toSec());
+        last_loop_time = now;
         const double elapsed = (now - experiment_start).toSec();
         const bool local_fresh = IsPoseFresh(g_local_pose, now, pose_timeout_sec);
         const bool tracker_fresh = IsPoseFresh(g_tracker_pose, now, pose_timeout_sec);
@@ -407,30 +534,31 @@ int main(int argc, char *argv[]) {
 
         if (protection_triggered) {
             stage = safety_landing_triggered ? 5 : 4;
-        } else if (elapsed < settle_time) {
+        } else if (!settle_complete) {
             stage = 0;
-        } else if (elapsed < settle_time + experiment_time) {
-            stage = 1;
-        } else if (elapsed < settle_time + experiment_time + recovery_time) {
-            stage = 2;
-        } else if (elapsed < settle_time + experiment_time + recovery_time +
-                               landing_publish_time.toSec()) {
-            stage = 3;
         } else {
-            break;
+            const double post_settle_elapsed = (now - post_settle_start).toSec();
+            if (post_settle_elapsed < experiment_time) {
+                stage = 1;
+            } else if (post_settle_elapsed < experiment_time + recovery_time) {
+                stage = 2;
+            } else if (post_settle_elapsed < experiment_time + recovery_time +
+                                      landing_publish_time.toSec()) {
+                stage = 3;
+            } else {
+                break;
+            }
         }
 
-        uav_pos_d.x_d = hover_x;
-        uav_pos_d.y_d = hover_y;
+        Vec3 raw_target = takeoff_hover_target;
         uav_pos_d.yaw_d = hover_yaw_deg;
-        uav_pos_d.z_d = hover_z;
         uav_pos_d.land_flag = false;
         current_angle.arm1_angle = arm1_offset_deg;
         current_angle.arm2_angle = arm2_offset_deg;
         current_angle.hand_angle = hand_hold_deg;
 
         if (stage == 1) {
-            const double disturb_time = elapsed - settle_time;
+            const double disturb_time = settle_complete ? (now - post_settle_start).toSec() : 0.0;
             current_angle.arm1_angle =
                 arm1_offset_deg +
                 arm1_sign * arm1_amp_deg *
@@ -459,6 +587,50 @@ int main(int argc, char *argv[]) {
                 (now - protection_state_start) > landing_publish_time) {
                 break;
             }
+        }
+
+        if (stage <= 2 && !protection_triggered) {
+            if (use_td_reference) {
+                UpdateTd(td, raw_target, dt, td_bandwidth_rad_s, td_accel_limit_xy,
+                         td_accel_limit_z, td_vel_limit_xy, td_vel_limit_z);
+                uav_pos_d.x_d = td.position.x;
+                uav_pos_d.y_d = td.position.y;
+                uav_pos_d.z_d = td.position.z;
+            } else {
+                ResetTd(td, raw_target);
+                uav_pos_d.x_d = raw_target.x;
+                uav_pos_d.y_d = raw_target.y;
+                uav_pos_d.z_d = raw_target.z;
+            }
+        }
+
+        if (!protection_triggered && stage == 0 && local_fresh && tracker_fresh) {
+            const double xy_error = std::sqrt(
+                (uav_pos_d.x_d - g_local_pose.position.x) *
+                    (uav_pos_d.x_d - g_local_pose.position.x) +
+                (uav_pos_d.y_d - g_local_pose.position.y) *
+                    (uav_pos_d.y_d - g_local_pose.position.y));
+            const double z_error = std::fabs(uav_pos_d.z_d - g_local_pose.position.z);
+            const bool reached_settle =
+                xy_error <= settle_reach_xy_m && z_error <= settle_reach_z_m;
+
+            if (reached_settle) {
+                if (settle_reached_since.isZero()) {
+                    settle_reached_since = now;
+                }
+            } else {
+                settle_reached_since = ros::Time();
+            }
+
+            if (elapsed >= settle_time && !settle_reached_since.isZero() &&
+                (now - settle_reached_since).toSec() >= settle_min_hold_s) {
+                settle_complete = true;
+                post_settle_start = now;
+                ROS_INFO("exp1 settle complete: xy_error=%.3f, z_error=%.3f, elapsed=%.2f s",
+                         xy_error, z_error, elapsed);
+            }
+        } else if (!protection_triggered && stage == 0) {
+            settle_reached_since = ros::Time();
         }
 
         bool freshness_fault = false;

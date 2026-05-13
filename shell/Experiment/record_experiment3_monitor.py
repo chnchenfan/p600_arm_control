@@ -14,7 +14,7 @@ def parse_args():
         description="Merge experiment 3 topic CSV files into one readable monitor log."
     )
     parser.add_argument("--desired-csv", required=True, help="CSV exported from /wjl/guidefly/pose_d")
-    parser.add_argument("--vrpn-csv", required=True, help="CSV exported from /vrpn_client_node/Tracker0/pose")
+    parser.add_argument("--vrpn-csv", required=True, help="CSV exported from /vrpn_client_node/arm_base/pose")
     parser.add_argument("--mavros-csv", required=True, help="CSV exported from /mavros/local_position/pose")
     parser.add_argument("--state-csv", required=True, help="CSV exported from /mavros/state")
     parser.add_argument("--bag", default="", help="Optional rosbag path for fallback topic extraction")
@@ -159,9 +159,9 @@ def write_merged_csv(desired_rows, vrpn_rows, mavros_rows, state_rows, output_pa
                 "desired_z",
                 "desired_yaw_deg",
                 "desired_land_flag",
-                "vrpn_x",
-                "vrpn_y",
-                "vrpn_z",
+                "arm_base_x",
+                "arm_base_y",
+                "arm_base_z",
                 "mavros_x",
                 "mavros_y",
                 "mavros_z",
@@ -169,8 +169,8 @@ def write_merged_csv(desired_rows, vrpn_rows, mavros_rows, state_rows, output_pa
                 "mavros_armed",
                 "mavros_mode",
                 "mavros_system_status",
-                "vrpn_minus_mavros_norm",
-                "vrpn_minus_desired_norm",
+                "arm_base_minus_mavros_norm",
+                "arm_base_minus_desired_norm",
             ]
         )
 

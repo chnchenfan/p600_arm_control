@@ -29,6 +29,12 @@ struct BasePoseState {
     double z = 0.0;
 };
 
+struct Vec3 {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+};
+
 BasePoseState g_base_pose;
 BasePoseState g_vrpn_pose;
 
@@ -49,6 +55,12 @@ struct FreezeWindowState {
     double z = 0.0;
 };
 
+struct TdState {
+    bool initialized = false;
+    Vec3 position{0.0, 0.0, 0.0};
+    Vec3 velocity{0.0, 0.0, 0.0};
+};
+
 // 通用限幅函数。
 // 一方面用于参数回退后的保护，另一方面用于最终关节命令限幅。
 double Clamp(double value, double min_value, double max_value) {
@@ -64,6 +76,42 @@ double Clamp(double value, double min_value, double max_value) {
 // 机械臂轨迹的外部参数用角度表达，三角函数内部统一转成弧度。
 double DegToRad(double value_deg) {
     return value_deg * std::acos(-1.0) / 180.0;
+}
+
+void ResetTd(TdState &td, const Vec3 &position) {
+    td.initialized = true;
+    td.position = position;
+    td.velocity = {0.0, 0.0, 0.0};
+}
+
+void UpdateTdAxis(double target, double dt, double bandwidth_rad_s, double accel_limit,
+                  double vel_limit, double &position, double &velocity) {
+    if (dt <= 0.0) {
+        return;
+    }
+
+    const double error = target - position;
+    double acceleration = bandwidth_rad_s * bandwidth_rad_s * error -
+                          2.0 * bandwidth_rad_s * velocity;
+    acceleration = Clamp(acceleration, -accel_limit, accel_limit);
+    velocity = Clamp(velocity + acceleration * dt, -vel_limit, vel_limit);
+    position += velocity * dt;
+}
+
+void UpdateTd(TdState &td, const Vec3 &target, double dt, double bandwidth_rad_s,
+              double accel_limit_xy, double accel_limit_z, double vel_limit_xy,
+              double vel_limit_z) {
+    if (!td.initialized) {
+        ResetTd(td, target);
+        return;
+    }
+
+    UpdateTdAxis(target.x, dt, bandwidth_rad_s, accel_limit_xy, vel_limit_xy,
+                 td.position.x, td.velocity.x);
+    UpdateTdAxis(target.y, dt, bandwidth_rad_s, accel_limit_xy, vel_limit_xy,
+                 td.position.y, td.velocity.y);
+    UpdateTdAxis(target.z, dt, bandwidth_rad_s, accel_limit_z, vel_limit_z,
+                 td.position.z, td.velocity.z);
 }
 
 bool IsPoseFresh(const BasePoseState &pose, const ros::Time &now, double timeout_sec) {
@@ -195,6 +243,33 @@ int main(int argc, char *argv[]) {
     double arm2_phase_deg = 0.0;
     double arm2_sign = 1.0;
     double hand_hold_deg = 0.0;
+    // ============================================= TD慢参考生成器 =============================================
+    // use_td_reference:
+    //   true 时，位置期望先经过 TD 平滑；false 时直接发布 raw target。
+    //
+    // td_bandwidth_hz:
+    //   TD 的等效带宽，越小参考越慢越柔。
+    //
+    // td_accel_limit_xy / td_accel_limit_z:
+    //   x/y 和 z 方向参考加速度上限，单位 m/s^2；值越小，给内环的指令变化越柔。
+    //
+    // td_vel_limit_xy / td_vel_limit_z:
+    //   x/y 和 z 方向参考速度上限，单位 m/s；方形段也会受这个速度上限约束。
+    //
+    // settle_reach_xy_m / settle_reach_z_m:
+    //   settle 完成判据，实际位置与当前 TD 期望的水平/高度误差阈值，单位 m。
+    //
+    // settle_min_hold_s:
+    //   进入误差阈值后至少稳定保持这么久，才允许进入方形轨迹和机械臂扰动，单位 s。
+    bool use_td_reference = true;
+    double td_bandwidth_hz = 0.18;
+    double td_accel_limit_xy = 0.04;
+    double td_accel_limit_z = 0.04;
+    double td_vel_limit_xy = 0.05;
+    double td_vel_limit_z = 0.05;
+    double settle_reach_xy_m = 0.10;
+    double settle_reach_z_m = 0.10;
+    double settle_min_hold_s = 2.0;
     bool enable_protection = true;
     bool protection_auto_land = false;
     double max_pose_disagreement = 0.6;
@@ -297,6 +372,15 @@ int main(int argc, char *argv[]) {
     pnh.param("arm2_phase_deg", arm2_phase_deg, arm2_phase_deg);
     pnh.param("arm2_sign", arm2_sign, arm2_sign);
     pnh.param("hand_hold_deg", hand_hold_deg, hand_hold_deg);
+    pnh.param("use_td_reference", use_td_reference, use_td_reference);
+    pnh.param("td_bandwidth_hz", td_bandwidth_hz, td_bandwidth_hz);
+    pnh.param("td_accel_limit_xy", td_accel_limit_xy, td_accel_limit_xy);
+    pnh.param("td_accel_limit_z", td_accel_limit_z, td_accel_limit_z);
+    pnh.param("td_vel_limit_xy", td_vel_limit_xy, td_vel_limit_xy);
+    pnh.param("td_vel_limit_z", td_vel_limit_z, td_vel_limit_z);
+    pnh.param("settle_reach_xy_m", settle_reach_xy_m, settle_reach_xy_m);
+    pnh.param("settle_reach_z_m", settle_reach_z_m, settle_reach_z_m);
+    pnh.param("settle_min_hold_s", settle_min_hold_s, settle_min_hold_s);
     pnh.param("enable_protection", enable_protection, enable_protection);
     pnh.param("protection_auto_land", protection_auto_land, protection_auto_land);
     pnh.param("max_pose_disagreement", max_pose_disagreement, max_pose_disagreement);
@@ -351,6 +435,30 @@ int main(int argc, char *argv[]) {
     }
     if (arm2_period <= 0.0) {
         arm2_period = 3.5;
+    }
+    if (td_bandwidth_hz <= 0.0) {
+        td_bandwidth_hz = 0.18;
+    }
+    if (td_accel_limit_xy <= 0.0) {
+        td_accel_limit_xy = 0.04;
+    }
+    if (td_accel_limit_z <= 0.0) {
+        td_accel_limit_z = 0.04;
+    }
+    if (td_vel_limit_xy <= 0.0) {
+        td_vel_limit_xy = 0.05;
+    }
+    if (td_vel_limit_z <= 0.0) {
+        td_vel_limit_z = 0.05;
+    }
+    if (settle_reach_xy_m <= 0.0) {
+        settle_reach_xy_m = 0.10;
+    }
+    if (settle_reach_z_m <= 0.0) {
+        settle_reach_z_m = 0.10;
+    }
+    if (settle_min_hold_s < 0.0) {
+        settle_min_hold_s = 0.0;
     }
     if (pose_timeout_sec <= 0.0) {
         pose_timeout_sec = 0.3;
@@ -442,6 +550,12 @@ int main(int argc, char *argv[]) {
         enable_protection ? "true" : "false", protection_auto_land ? "true" : "false",
         max_pose_disagreement, max_tracking_error, max_altitude_drop, protection_trigger_cycles,
         protection_hold_time, pose_timeout_sec, freeze_window_sec);
+    ROS_INFO(
+        "exp3 TD: enabled=%s, bw=%.2f Hz, acc_xy=%.3f, acc_z=%.3f, vel_xy=%.3f, vel_z=%.3f, settle_reach=(xy %.3f, z %.3f), settle_hold=%.2f s",
+        use_td_reference ? "true" : "false", td_bandwidth_hz, td_accel_limit_xy,
+        td_accel_limit_z, td_vel_limit_xy, td_vel_limit_z, settle_reach_xy_m,
+        settle_reach_z_m, settle_min_hold_s);
+    ROS_INFO("exp3 slow takeoff: x/y will anchor at current local pose; z tracks hover_z through TD");
 
     ros::Rate rate(30.0);
     while (ros::ok() && !start_flag) {
@@ -452,11 +566,29 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    while (ros::ok() && !IsPoseFresh(g_base_pose, ros::Time::now(), pose_timeout_sec)) {
+        ROS_WARN_THROTTLE(1.0, "exp3 waiting for fresh local pose before TD initialization");
+        ros::spinOnce();
+        rate.sleep();
+    }
+    if (!ros::ok()) {
+        return 0;
+    }
+
+    const Vec3 takeoff_initial_position{g_base_pose.x, g_base_pose.y, g_base_pose.z};
+    const Vec3 takeoff_hover_target{takeoff_initial_position.x, takeoff_initial_position.y, hover_z};
+    const double td_bandwidth_rad_s = 2.0 * std::acos(-1.0) * td_bandwidth_hz;
+    TdState td;
+    ResetTd(td, takeoff_initial_position);
+    ROS_INFO("exp3 takeoff anchor: current local=(%.3f, %.3f, %.3f), target=(%.3f, %.3f, %.3f)",
+             takeoff_initial_position.x, takeoff_initial_position.y, takeoff_initial_position.z,
+             takeoff_hover_target.x, takeoff_hover_target.y, takeoff_hover_target.z);
+
     uav::xyz_yaw_d uav_pos_d;
     uam_message::arm_angle current_angle;
-    uav_pos_d.x_d = 0.0;
-    uav_pos_d.y_d = 0.0;
-    uav_pos_d.z_d = hover_z;
+    uav_pos_d.x_d = takeoff_initial_position.x;
+    uav_pos_d.y_d = takeoff_initial_position.y;
+    uav_pos_d.z_d = takeoff_initial_position.z;
     uav_pos_d.yaw_d = hover_yaw_deg;
     uav_pos_d.land_flag = false;
     current_angle.arm1_angle = arm1_offset_deg;
@@ -465,13 +597,17 @@ int main(int argc, char *argv[]) {
 
     // square_origin_x / y:
     //   正方形的第一个顶点。
-    //   它不是参数写死的，而是在实验真正开始后，用飞机“当前实际位置”冻结得到。
+    //   它不是参数写死的，而是在实验真正开始后，用飞机“当前 local 位置”冻结得到。
+    //   起飞和 settle 都保持这个 x/y，后续方形移动是在该当前位置基础上加减 square_side_length。
     //   这样做的目的是避免飞机先飞去某个固定原点。
-    bool square_origin_initialized = false;
-    double square_origin_x = 0.0;
-    double square_origin_y = 0.0;
+    bool square_origin_initialized = true;
+    double square_origin_x = takeoff_initial_position.x;
+    double square_origin_y = takeoff_initial_position.y;
     bool protection_triggered = false;
     bool safety_landing_triggered = false;
+    bool settle_complete = false;
+    ros::Time settle_reached_since;
+    ros::Time post_settle_start;
     std::string protection_reason = "none";
     ros::Time protection_start_time;
     int protection_violation_count = 0;
@@ -485,12 +621,15 @@ int main(int argc, char *argv[]) {
     uav::xyz_yaw_d last_safe_uav_pos_d = uav_pos_d;
 
     const ros::Time experiment_start = ros::Time::now();
+    ros::Time last_loop_time = experiment_start;
     ros::Time last_log_time = experiment_start - ros::Duration(1.0);
 
     while (ros::ok()) {
         ros::spinOnce();
 
         const ros::Time now = ros::Time::now();
+        const double dt = std::max(0.0, (now - last_loop_time).toSec());
+        last_loop_time = now;
         const double elapsed = (now - experiment_start).toSec();
         int stage = 0;
 
@@ -523,17 +662,20 @@ int main(int argc, char *argv[]) {
             }
             stage = (safety_landing_triggered ||
                      (protection_auto_land && protection_elapsed >= protection_hold_time)) ? 5 : 4;
-        } else if (elapsed < settle_time) {
+        } else if (!settle_complete) {
             stage = 0;
-        } else if (elapsed < settle_time + square_motion_time) {
-            stage = 1;
-        } else if (elapsed < settle_time + square_motion_time + recovery_time) {
-            stage = 2;
-        } else if (elapsed < settle_time + square_motion_time + recovery_time +
-                               landing_publish_time.toSec()) {
-            stage = 3;
         } else {
-            break;
+            const double post_settle_elapsed = (now - post_settle_start).toSec();
+            if (post_settle_elapsed < square_motion_time) {
+                stage = 1;
+            } else if (post_settle_elapsed < square_motion_time + recovery_time) {
+                stage = 2;
+            } else if (post_settle_elapsed < square_motion_time + recovery_time +
+                                          landing_publish_time.toSec()) {
+                stage = 3;
+            } else {
+                break;
+            }
         }
 
         if (!square_origin_initialized && g_base_pose.valid) {
@@ -551,10 +693,10 @@ int main(int argc, char *argv[]) {
         //
         // 之后再根据 stage 覆盖主段逻辑。
         uav_pos_d.land_flag = false;
-        uav_pos_d.z_d = hover_z;
+        uav_pos_d.x_d = takeoff_hover_target.x;
+        uav_pos_d.y_d = takeoff_hover_target.y;
+        uav_pos_d.z_d = takeoff_hover_target.z;
         uav_pos_d.yaw_d = hover_yaw_deg;
-        uav_pos_d.x_d = square_origin_x;
-        uav_pos_d.y_d = square_origin_y;
         current_angle.arm1_angle = arm1_offset_deg;
         current_angle.arm2_angle = arm2_offset_deg;
         current_angle.hand_angle = hand_hold_deg;
@@ -573,7 +715,7 @@ int main(int argc, char *argv[]) {
             // 1: P1 -> P2   (+y)
             // 2: P2 -> P3   (-x)
             // 3: P3 -> P0   (-y)
-            const double motion_time = elapsed - settle_time;
+            const double motion_time = settle_complete ? (now - post_settle_start).toSec() : 0.0;
             const int edge_index = std::min(3, static_cast<int>(motion_time / edge_time));
             const double edge_elapsed = motion_time - edge_index * edge_time;
             const double ratio = Clamp(edge_elapsed / edge_time, 0.0, 1.0);
@@ -654,6 +796,51 @@ int main(int argc, char *argv[]) {
             current_angle.hand_angle = safety_hold_hand_deg;
         }
 
+        if (stage <= 2 && !protection_triggered) {
+            const Vec3 raw_target{uav_pos_d.x_d, uav_pos_d.y_d, uav_pos_d.z_d};
+            if (use_td_reference) {
+                UpdateTd(td, raw_target, dt, td_bandwidth_rad_s, td_accel_limit_xy,
+                         td_accel_limit_z, td_vel_limit_xy, td_vel_limit_z);
+                uav_pos_d.x_d = td.position.x;
+                uav_pos_d.y_d = td.position.y;
+                uav_pos_d.z_d = td.position.z;
+            } else {
+                ResetTd(td, raw_target);
+            }
+        }
+
+        if (!protection_triggered && stage == 0) {
+            const bool local_fresh = IsPoseFresh(g_base_pose, now, pose_timeout_sec);
+            const bool vrpn_fresh = IsPoseFresh(g_vrpn_pose, now, pose_timeout_sec);
+            if (local_fresh && vrpn_fresh) {
+                const double xy_error = std::sqrt(
+                    (uav_pos_d.x_d - g_base_pose.x) * (uav_pos_d.x_d - g_base_pose.x) +
+                    (uav_pos_d.y_d - g_base_pose.y) * (uav_pos_d.y_d - g_base_pose.y));
+                const double z_error = std::fabs(uav_pos_d.z_d - g_base_pose.z);
+                const bool reached_settle =
+                    xy_error <= settle_reach_xy_m && z_error <= settle_reach_z_m;
+
+                if (reached_settle) {
+                    if (settle_reached_since.isZero()) {
+                        settle_reached_since = now;
+                    }
+                } else {
+                    settle_reached_since = ros::Time();
+                }
+
+                if (elapsed >= settle_time && !settle_reached_since.isZero() &&
+                    (now - settle_reached_since).toSec() >= settle_min_hold_s) {
+                    settle_complete = true;
+                    post_settle_start = now;
+                    last_safe_uav_pos_d = uav_pos_d;
+                    ROS_INFO("exp3 settle complete: elapsed=%.2f s, xy_error=%.3f m, z_error=%.3f m",
+                             elapsed, xy_error, z_error);
+                }
+            } else {
+                settle_reached_since = ros::Time();
+            }
+        }
+
         // ----------------------------
         // 实验三保护逻辑
         // ----------------------------
@@ -689,7 +876,10 @@ int main(int argc, char *argv[]) {
                     violation = true;
                 }
 
-                last_altitude_drop = hover_z - g_vrpn_pose.z;
+                // TD 慢起飞的 settle 阶段，高度期望本身还在从当前高度缓慢爬升。
+                // 这时不能用 hover_z - 当前高度判断“掉高”，否则会把正常慢起飞误判成保护。
+                // settle 完成后再恢复原来的 hover_z 掉高判据。
+                last_altitude_drop = (stage == 0 ? uav_pos_d.z_d : hover_z) - g_vrpn_pose.z;
                 if (last_altitude_drop > max_altitude_drop) {
                     violation = true;
                 }
