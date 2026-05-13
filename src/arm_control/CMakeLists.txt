@@ -177,6 +177,7 @@ target_link_libraries(uam_desired_exp2_static_ik ${catkin_LIBRARIES})
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   scripts/arm_B_dh.py
+  scripts/arm_eso_px4_bridge.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

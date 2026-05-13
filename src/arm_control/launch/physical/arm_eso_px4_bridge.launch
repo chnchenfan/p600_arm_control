@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="arm_angle_topic" default="/wjl/arm/real/angle_r"/>
+    <arg name="mavlink_topic" default="/mavlink/to"/>
+    <arg name="send_rate_hz" default="120.0"/>
+    <arg name="source_timeout" default="0.25"/>
+    <arg name="max_abs_dq" default="20.0"/>
+    <arg name="arm1_offset_deg" default="0.0"/>
+    <arg name="arm2_offset_deg" default="0.0"/>
+    <arg name="invert_arm1" default="false"/>
+    <arg name="invert_arm2" default="false"/>
+
+    <node pkg="arm_control" type="arm_eso_px4_bridge.py" name="arm_eso_px4_bridge" output="screen">
+        <param name="arm_angle_topic" value="$(arg arm_angle_topic)"/>
+        <param name="mavlink_topic" value="$(arg mavlink_topic)"/>
+        <param name="send_rate_hz" value="$(arg send_rate_hz)"/>
+        <param name="source_timeout" value="$(arg source_timeout)"/>
+        <param name="max_abs_dq" value="$(arg max_abs_dq)"/>
+        <param name="arm1_offset_deg" value="$(arg arm1_offset_deg)"/>
+        <param name="arm2_offset_deg" value="$(arg arm2_offset_deg)"/>
+        <param name="invert_arm1" value="$(arg invert_arm1)"/>
+        <param name="invert_arm2" value="$(arg invert_arm2)"/>
+    </node>
+</launch>
