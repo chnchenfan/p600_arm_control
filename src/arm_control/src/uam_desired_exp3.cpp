@@ -73,6 +73,14 @@ double Clamp(double value, double min_value, double max_value) {
     return value;
 }
 
+double RoundToCentimeter(double value) {
+    return std::round(value * 100.0) / 100.0;
+}
+
+Vec3 RoundVec3ToCentimeter(const Vec3 &value) {
+    return {RoundToCentimeter(value.x), RoundToCentimeter(value.y), RoundToCentimeter(value.z)};
+}
+
 // 机械臂轨迹的外部参数用角度表达，三角函数内部统一转成弧度。
 double DegToRad(double value_deg) {
     return value_deg * std::acos(-1.0) / 180.0;
@@ -261,7 +269,7 @@ int main(int argc, char *argv[]) {
     //
     // settle_min_hold_s:
     //   进入误差阈值后至少稳定保持这么久，才允许进入方形轨迹和机械臂扰动，单位 s。
-    bool use_td_reference = true;
+    bool use_td_reference = false;
     double td_bandwidth_hz = 0.18;
     double td_accel_limit_xy = 0.04;
     double td_accel_limit_z = 0.04;
@@ -575,7 +583,8 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    const Vec3 takeoff_initial_position{g_base_pose.x, g_base_pose.y, g_base_pose.z};
+    const Vec3 takeoff_initial_position =
+        RoundVec3ToCentimeter(Vec3{g_base_pose.x, g_base_pose.y, g_base_pose.z});
     const Vec3 takeoff_hover_target{takeoff_initial_position.x, takeoff_initial_position.y, hover_z};
     const double td_bandwidth_rad_s = 2.0 * std::acos(-1.0) * td_bandwidth_hz;
     TdState td;

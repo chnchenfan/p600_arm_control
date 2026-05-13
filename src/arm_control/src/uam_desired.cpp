@@ -62,6 +62,14 @@ double Clamp(double value, double min_value, double max_value) {
     return value;
 }
 
+double RoundToCentimeter(double value) {
+    return std::round(value * 100.0) / 100.0;
+}
+
+Vec3 RoundVec3ToCentimeter(const Vec3 &value) {
+    return {RoundToCentimeter(value.x), RoundToCentimeter(value.y), RoundToCentimeter(value.z)};
+}
+
 double DegToRad(double value_deg) {
     return value_deg * std::acos(-1.0) / 180.0;
 }
@@ -231,7 +239,7 @@ int main(int argc, char *argv[]) {
     //
     // settle_min_hold_s:
     //   进入误差阈值后至少稳定保持这么久，才允许进入机械臂扰动阶段，单位 s。
-    bool use_td_reference = true;
+    bool use_td_reference = false;
     double td_bandwidth_hz = 0.22;
     double td_accel_limit_xy = 0.10;
     double td_accel_limit_z = 0.08;
@@ -449,7 +457,7 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    const Vec3 takeoff_initial_position = g_local_pose.position;
+    const Vec3 takeoff_initial_position = RoundVec3ToCentimeter(g_local_pose.position);
     const Vec3 takeoff_hover_target{takeoff_initial_position.x, takeoff_initial_position.y, hover_z};
     ROS_INFO("exp1 takeoff anchor: current local=(%.3f, %.3f, %.3f), target=(%.3f, %.3f, %.3f)",
              takeoff_initial_position.x, takeoff_initial_position.y, takeoff_initial_position.z,

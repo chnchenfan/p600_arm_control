@@ -110,6 +110,14 @@ double Clamp(double value, double min_value, double max_value) {
     return value;
 }
 
+double RoundToCentimeter(double value) {
+    return std::round(value * 100.0) / 100.0;
+}
+
+Vec3 RoundVec3ToCentimeter(const Vec3 &value) {
+    return {RoundToCentimeter(value.x), RoundToCentimeter(value.y), RoundToCentimeter(value.z)};
+}
+
 double DegToRad(double value_deg) {
     return value_deg * std::acos(-1.0) / 180.0;
 }
@@ -474,7 +482,7 @@ int main(int argc, char *argv[]) {
     //
     // td_vel_limit_xy / td_vel_limit_z:
     //   x/y 和 z 方向参考速度上限，单位 m/s；exp4 任务段也会受这个速度上限约束。
-    bool use_td_reference = true;
+    bool use_td_reference = false;
     double td_bandwidth_hz = 0.22;
     double td_accel_limit_xy = 0.10;
     double td_accel_limit_z = 0.08;
@@ -934,22 +942,23 @@ int main(int argc, char *argv[]) {
             // hover_anchor 统一按 arm_base 语义冻结：
             // - world_anchor 用于把 target 世界点映射到 PX4 输出系
             // - output_anchor 就是当前 /mavros/local_position/pose
+            const Vec3 rounded_local_position = RoundVec3ToCentimeter(g_local_pose.position);
             hover_anchor_world = g_base_world_pose.position;
             hover_anchor_world.z = hover_z;
-            hover_anchor_output = g_local_pose.position;
+            hover_anchor_output = rounded_local_position;
             hover_anchor_output.z = hover_z;
             mapping_world_anchor = g_base_world_pose.position;
-            mapping_output_anchor = g_local_pose.position;
+            mapping_output_anchor = rounded_local_position;
             frame_mapping_initialized = true;
             hover_anchor_initialized = true;
             ensure_loop_waypoints_initialized();
             safe_hover_output = hover_anchor_output;
             last_safe_output_position = hover_anchor_output;
             last_safe_output_initialized = true;
-            ResetTd(reference_td, g_local_pose.position);
-            uav_pos_d.x_d = g_local_pose.position.x;
-            uav_pos_d.y_d = g_local_pose.position.y;
-            uav_pos_d.z_d = g_local_pose.position.z;
+            ResetTd(reference_td, rounded_local_position);
+            uav_pos_d.x_d = rounded_local_position.x;
+            uav_pos_d.y_d = rounded_local_position.y;
+            uav_pos_d.z_d = rounded_local_position.z;
         }
 
         if (motion_stage != last_logged_stage) {
@@ -991,9 +1000,10 @@ int main(int argc, char *argv[]) {
                 // - 再慢慢升到实验悬停高度。
                 if (!hover_anchor_initialized) {
                     if (local_fresh) {
-                        next_uav_pos_d.x_d = g_local_pose.position.x;
-                        next_uav_pos_d.y_d = g_local_pose.position.y;
-                        next_uav_pos_d.z_d = g_local_pose.position.z;
+                        const Vec3 current_output = RoundVec3ToCentimeter(g_local_pose.position);
+                        next_uav_pos_d.x_d = current_output.x;
+                        next_uav_pos_d.y_d = current_output.y;
+                        next_uav_pos_d.z_d = current_output.z;
                     } else {
                         next_uav_pos_d.x_d = uav_pos_d.x_d;
                         next_uav_pos_d.y_d = uav_pos_d.y_d;
