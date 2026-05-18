@@ -1,354 +1,232 @@
 # p600_arm_control
 
-P600 UAV arm-side workspace. This repository contains the arm model, arm execution nodes, experiment-level reference generators, recording scripts, and offline plotting tools. It works together with [UAV_project](https://github.com/chnchenfan/P600_uav_control) through shared ROS topics and services to run the four UAV-arm experiments.
+P600 无人机机械臂侧 catkin 工作空间。该仓库负责机械臂执行、机械臂/无人机实验期望生成、联合实验脚本、数据记录与离线绘图；飞控执行链位于配套仓库 [UAV_project](https://github.com/chnchenfan/P600_uav_control)。
 
-GitHub: <https://github.com/chnchenfan/p600_arm_control>  
-Companion flight-control repository: <https://github.com/chnchenfan/P600_uav_control>
+- GitHub: <https://github.com/chnchenfan/p600_arm_control>
+- 配套飞控仓库: <https://github.com/chnchenfan/P600_uav_control>
+- 推荐环境: Ubuntu 18.04 + ROS Melodic
 
-## Overview
+## 目录结构
 
-- Recommended environment: Ubuntu 18.04 + ROS Melodic
-- Arm control and experiment nodes live in `src/arm_control`
-- Custom messages, configs, and visualization presets live in `src/uam_message`
-- UAV-arm model assets live in `src/uam_v4`
-- Experiment startup, recording, and plotting scripts live in `shell/`
+- `src/arm_control`: 机械臂控制、实验期望生成、静态标定与仿真/实物 launch
+- `src/uam_message`: 自定义消息、动态参数、机械臂初始参数和可视化配置
+- `src/uam_v4`: UAV-arm 模型、URDF/SDF、Gazebo/RViz 启动文件
+- `src/gazebo_plugin`: Gazebo 插件
+- `src/xbox_control`: Xbox 手柄控制入口
+- `shell/Compile`: 工作空间编译脚本
+- `shell/Experiment`: 真机/联合实验启动、录包和静态标定采集脚本
+- `shell/Simulation`: 仿真启动脚本
+- `shell/Plot`: 实验数据离线绘图脚本
 
-Key directories:
+## 与 UAV_project 的分工
 
-- `src/arm_control/src`: arm execution nodes and experiment 1/2/3/4 reference generators
-- `src/arm_control/launch`: simulation and physical launch entrypoints
-- `src/arm_control/shell`: arm-side helper launch scripts
-- `shell/Experiment`: combined experiment startup and rosbag recording scripts
-- `shell/Plot`: offline plotting scripts for experiments 1/2/3/4
-- `src/arm_control/README_calibration.md`: staged static calibration workflow for experiment 2 geometry
-- Static calibration is split as: aircraft-side collection + host-side offline fitting
+本仓库是“机械臂与任务层”，负责发布实验期望：
 
-## Information Flow
+- `/wjl/guidefly/pose_d`: 无人机位置、偏航和降落标志
+- `/wjl/arm/guidefly/angle_d`: 机械臂关节期望
+- `/wjl/start/uav_desired`: 启动实验期望生成的服务
 
-The system runs as: experiment reference generation -> UAV execution + arm execution -> feedback -> logging and offline analysis.
+`UAV_project` 是“飞控执行层”，负责接收 `/wjl/guidefly/pose_d`，通过 PX4/MAVROS 执行无人机运动，并反馈 `/mavros/local_position/pose`、`/mavros/state` 等状态。
 
-1. Experiment nodes publish unified references
-- `uam_desired.cpp`
-- `uam_desired_exp2.cpp`
-- `uam_desired_exp3.cpp`
-- `uam_desired_exp4.cpp`
+机械臂执行节点消费 `/wjl/arm/guidefly/angle_d`，并发布：
 
-These nodes expose:
-
-- service `/wjl/start/uav_desired`
-- UAV reference `/wjl/guidefly/pose_d`
-- arm reference `/wjl/arm/guidefly/angle_d`
-
-2. UAV-side execution
-- `desired_uav_fly.launch` in `UAV_project` starts the flight execution chain
-- `UAV_project/src/uav/src/uav/Uav_info.cpp` subscribes to `/wjl/guidefly/pose_d`
-- UAV position, yaw, and landing commands are converted into PX4/MAVROS-side execution commands
-
-3. Arm-side execution
-- Physical arm: `rosrun arm_control serial_`
-- Simulation: `motors_simulation`
-
-These nodes consume `/wjl/arm/guidefly/angle_d` and publish:
-
-- `/wjl/arm/real/angle_r`
-- `/wjl/arm/real/angle_error`
-
-4. Feedback inputs used by experiment logic
-
-- `/mavros/local_position/pose`: actual UAV base pose
-- `/mavros/state`: MAVROS connection and mode state
-- `/vrpn_client_node/Tracker0/pose`: mocap truth of the base
-- `/wjl/arm/real/angle_r`: measured arm joint angles
-- Experiment 4 additionally uses `/vrpn_client_node/ring1/pose` to `/vrpn_client_node/ring4/pose`
-
-5. Logging and post-processing
-
-- `shell/Experiment/record_experiment_data.sh exp1`
-- `shell/Experiment/record_experiment_data.sh exp2`
-- `shell/Experiment/record_experiment_data.sh exp3`
-- `shell/Experiment/record_experiment_data.sh exp4`
-
-Offline plotting scripts:
-
-- `shell/Plot/plot_experiment1.py`
-- `shell/Plot/plot_experiment2.py`
-- `shell/Plot/plot_experiment3.py`
-- `shell/Plot/plot_experiment4.py`
-
-## The Four Experiments
-
-### Experiment 1: Hover with arm disturbance baseline
-
-Goal:
-- Keep the UAV at a fixed hover point
-- Drive the arm with periodic two-joint motion
-- Observe base tracking and end-effector disturbance response
-
-Main entrypoints:
-- Control node: `src/arm_control/src/uam_desired.cpp`
-- Combined startup: `shell/Experiment/uam_control_desired.sh`
-- Recording: `shell/Experiment/record_experiment_data.sh exp1`
-- Plotting: `shell/Plot/plot_experiment1.py`
-
-### Experiment 2: Circular base motion with end-effector hold compensation
-
-Goal:
-- Fly the UAV along a small circle in the world frame
-- Use online inverse kinematics to keep the end effector close to a fixed world point
-
-Main entrypoints:
-- Control node: `src/arm_control/src/uam_desired_exp2.cpp`
-- Arm-side startup: `src/arm_control/shell/desired_uam_fly_exp2.sh`
-- Combined startup: `shell/Experiment/uam_control_desired_exp2.sh`
-- Static ground IK test: `shell/Experiment/uam_control_desired_exp2_static_ik.sh`
-- Recording: `shell/Experiment/record_experiment_data.sh exp2`
-- Plotting: `shell/Plot/plot_experiment2.py`
-
-### Experiment 3: Square base motion with periodic arm motion
-
-Goal:
-- Fly the UAV along a square trajectory
-- Run periodic two-joint arm motion in parallel
-- Add a safety layer based on MAVROS and mocap feedback
-
-Main entrypoints:
-- Control node: `src/arm_control/src/uam_desired_exp3.cpp`
-- Arm-side startup: `src/arm_control/shell/desired_uam_fly_exp3.sh`
-- Combined startup: `shell/Experiment/uam_control_desired_exp3.sh`
-- Recording: `shell/Experiment/record_experiment_data.sh exp3`
-- Plotting: `shell/Plot/plot_experiment3.py`
-
-### Experiment 4: Aerial ring passage
-
-Goal:
-- Pass the end effector through `ring1 -> ring2 -> ring3 -> ring4` in sequence
-- Use mocap-provided ring positions in real time
-- Let the UAV base handle large transport motion and the arm handle local alignment
-- Keep the gripper closed throughout the mission, without onboard grasping logic
-
-Main entrypoints:
-- Control node: `src/arm_control/src/uam_desired_exp4.cpp`
-- Arm-side startup: `src/arm_control/shell/desired_uam_fly_exp4.sh`
-- Combined startup: `shell/Experiment/uam_control_desired_exp4.sh`
-- Recording: `shell/Experiment/record_experiment_data.sh exp4`
-- Plotting: `shell/Plot/plot_experiment4.py`
-
-Additional experiment 4 inputs:
-
-- `/vrpn_client_node/ring1/pose`
-- `/vrpn_client_node/ring2/pose`
-- `/vrpn_client_node/ring3/pose`
-- `/vrpn_client_node/ring4/pose`
-
-## Common Entrypoints
-
-Combined experiment startup scripts:
-
-- Experiment 1: `shell/Experiment/uam_control_desired.sh`
-- Experiment 2: `shell/Experiment/uam_control_desired_exp2.sh`
-- Experiment 2 static IK test: `shell/Experiment/uam_control_desired_exp2_static_ik.sh`
-- Experiment 3: `shell/Experiment/uam_control_desired_exp3.sh`
-- Experiment 4: `shell/Experiment/uam_control_desired_exp4.sh`
-
-Simulation launch files:
-
-- Experiment 1: `src/arm_control/launch/simulation/desired_uam_fly.launch`
-- Experiment 2: `src/arm_control/launch/simulation/desired_uam_fly_exp2.launch`
-- Experiment 3: `src/arm_control/launch/simulation/desired_uam_fly_exp3.launch`
-- Experiment 4: `src/arm_control/launch/simulation/desired_uam_fly_exp4.launch`
-
-## Notes
-
-- This repository is the arm and experiment-task layer, not the standalone flight-control repository.
-- Real experiments require `UAV_project` to be started together with this workspace.
-- Experiment 4 assumes ring center positions come from mocap; it does not use visual detection and does not close the loop on ring orientation.
-
-# p600_arm_control
-
-P600 无人机机械臂侧工作空间。这个仓库负责机械臂模型、机械臂控制、实验期望生成、录包与离线绘图，并通过统一话题与 [UAV_project](https://github.com/chnchenfan/P600_uav_control) 协同完成四个实验。
-
-GitHub: <https://github.com/chnchenfan/p600_arm_control>  
-配套飞控仓库: <https://github.com/chnchenfan/P600_uav_control>
-
-## 基本信息
-
-- 推荐运行环境: Ubuntu 18.04 + ROS Melodic
-- 机械臂控制与实验节点位于 `src/arm_control`
-- 消息、参数和可视化配置位于 `src/uam_message`
-- 模型与 Gazebo 资源位于 `src/uam_v4`
-- 脚本入口位于 `shell/`
-
-核心目录:
-
-- `src/arm_control/src`: 机械臂控制节点、实验 1/2/3/4 期望生成节点
-- `src/arm_control/launch`: 仿真/实物启动入口
-- `src/arm_control/shell`: 机械臂侧单独启动脚本
-- `shell/Experiment`: 联合启动、录包脚本
-- `shell/Plot`: 实验 1/2/3/4 离线绘图脚本
-
-## 信息流
-
-系统按“实验期望生成 -> 无人机执行 + 机械臂执行 -> 反馈闭环/记录”的方式工作。
-
-1. 实验节点发布期望
-- `uam_desired.cpp`
-- `uam_desired_exp2.cpp`
-- `uam_desired_exp3.cpp`
-- `uam_desired_exp4.cpp`
-
-这些节点统一提供：
-
-- 服务 `/wjl/start/uav_desired`
-- 无人机期望 `/wjl/guidefly/pose_d`
-- 机械臂期望 `/wjl/arm/guidefly/angle_d`
-
-2. 无人机侧执行
-- `UAV_project` 中的 `desired_uav_fly.launch` 启动飞行控制链
-- `UAV_project/src/uav/src/uav/Uav_info.cpp` 订阅 `/wjl/guidefly/pose_d`
-- 无人机将 `x/y/z/yaw/land_flag` 转成 PX4/MAVROS 侧的飞行指令
-
-3. 机械臂侧执行
-- 真机: `rosrun arm_control serial_`
-- 仿真: `motors_simulation`
-
-执行节点消费 `/wjl/arm/guidefly/angle_d`，并反馈：
-
-- `/wjl/arm/real/angle_r`
-- `/wjl/arm/real/angle_error`
-
-4. 反馈输入
-
-实验节点按实验类型订阅以下反馈：
-
-- `/mavros/local_position/pose`: 无人机基座实际位姿
-- `/mavros/state`: 飞控连接与模式状态
-- 动捕基座源按实验切换：
-  - 实验 1 / 3: `/vrpn_client_node/Tracker0/pose`
-  - 实验 2: `/vrpn_client_node/arm_base/pose`
-  - 实验 4: `/vrpn_client_node/arm_target/pose`
+- `/wjl/arm/real/angle_d`: 执行层目标角
 - `/wjl/arm/real/angle_r`: 机械臂实际角
-- 实验四额外使用 `/vrpn_client_node/ring1/pose` 到 `/vrpn_client_node/ring4/pose`
+- `/wjl/arm/real/angle_error`: 机械臂关节误差
 
-5. 数据记录与复盘
+## 编译
 
-- `shell/Experiment/record_experiment_data.sh exp1`
-- `shell/Experiment/record_experiment_data.sh exp2`
-- `shell/Experiment/record_experiment_data.sh exp3`
-- `shell/Experiment/record_experiment_data.sh exp4`
+脚本内默认使用 `~/p600_arm_control` 和 `~/UAV_project`。如果仓库不在 home 目录下，建议先建立软链接或按实际路径手动进入工作空间编译。
 
-配套离线绘图:
+```bash
+cd ~/p600_arm_control
+bash shell/Compile/catkin_make_all.sh
+source devel/setup.bash
+```
 
-- `shell/Plot/plot_experiment1.py`
-- `shell/Plot/plot_experiment2.py`
-- `shell/Plot/plot_experiment3.py`
-- `shell/Plot/plot_experiment4.py`
+编译顺序为：
+
+1. `uam_message`
+2. `arm_control`
+3. `xbox_control`
+
+`arm_control` 依赖 `UAV_project/devel/include` 中的无人机消息/服务头文件，因此通常需要先编译 `UAV_project` 的 `uav` 包。
 
 ## 四个实验
 
 ### 实验 1: 悬停下机械臂扰动基线
 
-目标:
+目标：
+
 - 无人机保持固定悬停点
-- 机械臂按双关节周期信号运动
-- 观察基座跟踪与末端扰动响应
+- 机械臂执行双关节周期运动
+- 观察机械臂扰动下的基座跟踪与末端响应
 
-主要入口:
-- 控制节点: `src/arm_control/src/uam_desired.cpp`
-- 联合启动: `shell/Experiment/uam_control_desired.sh`
-- 录包: `shell/Experiment/record_experiment_data.sh exp1`
-- 绘图: `shell/Plot/plot_experiment1.py`
+入口：
 
-### 实验 2: `arm_base/arm_target` 全姿态末端定点补偿
+- 实验节点: `src/arm_control/src/uam_desired.cpp`
+- 联合启动: `bash shell/Experiment/uam_control_desired.sh`
+- 录包: `bash shell/Experiment/record_experiment_data.sh exp1`
+- 绘图: `python3 shell/Plot/plot_experiment1.py`
 
-目标:
-- 无人机在 `x-z` 平面按圆弧参考运动
-- `arm_base` 提供机械臂基座在动捕世界系下的完整位姿
-- `arm_target` 提供末端工作点在动捕世界系下的实测位置
-- 机械臂通过 2DoF 在线逆解与末端位置外环补偿，使末端尽量固定在世界系某一点
+### 实验 2: 基座运动下的末端定点补偿
 
-主要入口:
-- 控制节点: `src/arm_control/src/uam_desired_exp2.cpp`
-- 机械臂启动: `src/arm_control/shell/desired_uam_fly_exp2.sh`
-- 联合启动: `shell/Experiment/uam_control_desired_exp2.sh`
-- 录包: `shell/Experiment/record_experiment_data.sh exp2`
-- 绘图: `shell/Plot/plot_experiment2.py`
+目标：
+
+- 无人机基座按实验参考运动
+- 动捕提供机械臂基座位姿和末端工作点反馈
+- 机械臂通过在线逆解与补偿，使末端尽量保持在世界系固定点附近
+
+入口：
+
+- 实验节点: `src/arm_control/src/uam_desired_exp2.cpp`
+- 联合启动: `bash shell/Experiment/uam_control_desired_exp2.sh`
+- 静态 IK 测试: `bash shell/Experiment/uam_control_desired_exp2_static_ik.sh`
+- 验证入口: `bash shell/Experiment/uam_control_desired_exp2_validation.sh`
+- 录包: `bash shell/Experiment/record_experiment_data.sh exp2`
+- 绘图: `python3 shell/Plot/plot_experiment2.py`
+- 标定说明: `src/arm_control/README_calibration.md`
 
 ### 实验 3: 基座方形轨迹 + 机械臂周期运动
 
-目标:
-- 无人机按正方形轨迹飞行
-- 机械臂同步做双关节周期运动
-- 加入基于 MAVROS 与动捕的一层保护逻辑
+目标：
 
-主要入口:
-- 控制节点: `src/arm_control/src/uam_desired_exp3.cpp`
-- 机械臂启动: `src/arm_control/shell/desired_uam_fly_exp3.sh`
-- 联合启动: `shell/Experiment/uam_control_desired_exp3.sh`
-- 录包: `shell/Experiment/record_experiment_data.sh exp3`
-- 绘图: `shell/Plot/plot_experiment3.py`
+- 无人机跟踪方形轨迹
+- 机械臂同步执行周期运动
+- 实验节点使用 MAVROS 和动捕反馈进行状态判断与保护
+
+入口：
+
+- 实验节点: `src/arm_control/src/uam_desired_exp3.cpp`
+- 联合启动: `bash shell/Experiment/uam_control_desired_exp3.sh`
+- 录包: `bash shell/Experiment/record_experiment_data.sh exp3`
+- 绘图: `python3 shell/Plot/plot_experiment3.py`
 
 ### 实验 4: 空中穿环
 
-目标:
-- 无人机机械臂末端按顺序穿过 `ring1 -> ring2 -> ring3 -> ring4`
-- 挂环位置由动捕实时提供
-- 基座负责大范围搬运，机械臂负责局部对准
-- 夹爪全程固定闭合，不包含抓取动作
+目标：
 
-主要入口:
-- 控制节点: `src/arm_control/src/uam_desired_exp4.cpp`
-- 机械臂启动: `src/arm_control/shell/desired_uam_fly_exp4.sh`
-- 联合启动: `shell/Experiment/uam_control_desired_exp4.sh`
-- 录包: `shell/Experiment/record_experiment_data.sh exp4`
-- 绘图: `shell/Plot/plot_experiment4.py`
+- 末端按顺序穿过 `ring1 -> ring2 -> ring3 -> ring4`
+- 挂环中心位置由动捕实时提供
+- 无人机基座负责大范围运输，机械臂负责局部对准
+- 夹爪全程保持闭合，不包含视觉识别或抓取逻辑
 
-实验四额外输入:
+入口：
+
+- 实验节点: `src/arm_control/src/uam_desired_exp4.cpp`
+- 联合启动: `bash shell/Experiment/uam_control_desired_exp4.sh`
+- 录包: `bash shell/Experiment/record_experiment_data.sh exp4`
+- 绘图: `python3 shell/Plot/plot_experiment4.py`
+
+实验 4 额外依赖动捕话题：
 
 - `/vrpn_client_node/ring1/pose`
 - `/vrpn_client_node/ring2/pose`
 - `/vrpn_client_node/ring3/pose`
 - `/vrpn_client_node/ring4/pose`
 
-## 真机启动顺序
+## 常用启动
 
-统一顺序不变：
+### 编译
 
-1. 启动动捕和 PX4
-2. 启动对应实验的录包脚本
-3. 启动对应实验的控制脚本
+```bash
+cd ~/p600_arm_control
+bash shell/Compile/catkin_make_all.sh
+```
 
-统一动捕入口：
+### 数据记录
 
-- 实验 1: `bash shell/Experiment/uam_mocap.sh exp1`
-- 实验 2: `bash shell/Experiment/uam_mocap.sh exp2`
-- 实验 3: `bash shell/Experiment/uam_mocap.sh exp3`
-- 实验 4: `bash shell/Experiment/uam_mocap.sh exp4`
+```bash
+cd ~/p600_arm_control
+source devel/setup.bash
+bash shell/Experiment/record_experiment_data.sh exp1
+```
 
-这样会自动选择对应刚体：
+示例输出：
 
-- `exp1` / `exp3` -> `Tracker0`
-- `exp2` -> `arm_base`
-- `exp4` -> `arm_target`
+```text
+实验录包输出目录: /home/amov/p600_arm_control/data/exp1/20260514_001234
+bag文件: /home/amov/p600_arm_control/data/exp1/20260514_001234/exp1_px4.bag
+```
 
-## 常用入口
+### 一、实验一
 
-联合启动脚本:
+1. 启动动捕和 PX4：
 
-- 实验 1: `shell/Experiment/uam_control_desired.sh`
-- 实验 2: `shell/Experiment/uam_control_desired_exp2.sh`
-- 实验 2 静态逆解测试: `shell/Experiment/uam_control_desired_exp2_static_ik.sh`
-- 实验 3: `shell/Experiment/uam_control_desired_exp3.sh`
-- 实验 4: `shell/Experiment/uam_control_desired_exp4.sh`
+```bash
+cd ~/p600_arm_control
+bash shell/Experiment/uam_mocap.sh exp1 192.168.xxx.xxx
+```
 
-仿真侧 launch:
+2. 启动控制实验：
 
-- 实验 1: `src/arm_control/launch/simulation/desired_uam_fly.launch`
-- 实验 2: `src/arm_control/launch/simulation/desired_uam_fly_exp2.launch`
-- 实验 3: `src/arm_control/launch/simulation/desired_uam_fly_exp3.launch`
-- 实验 4: `src/arm_control/launch/simulation/desired_uam_fly_exp4.launch`
+```bash
+cd ~/p600_arm_control
+bash shell/Experiment/uam_control_desired.sh
+```
 
-## 说明
+### 二、实验二
 
-- 本仓库主要负责“机械臂与实验任务层”，不是单独的飞控仓库。
-- 实验真正执行时，必须与 `UAV_project` 同时启动。
-- 实验四默认依赖动捕返回挂环中心位置，不使用视觉识别，也不把挂环姿态纳入控制闭环。
+```bash
+cd ~/p600_arm_control
+bash shell/Experiment/uam_mocap.sh exp2 192.168.xxx.xxx
+bash shell/Experiment/uam_control_desired_exp2.sh
+```
+
+机械臂数据标定与拟合：
+
+```bash
+cd ~/p600_arm_control
+bash shell/Experiment/uam_mocap.sh exp2 <VRPN_SERVER_IP>
+bash shell/Experiment/uam_static_calibration_collect.sh
+bash shell/Experiment/record_static_calibration_data.sh
+```
+
+后续在自己电脑上绘图：
+
+```bash
+source /opt/ros/noetic/setup.bash
+python3 /home/cf/Program/code/P600_uam/p600_arm_control/shell/Calibration/fit_static_geometry_stage1.py --bag /home/cf/Program/code/P600_uam/data/calibration/static/2026324_1/calibration_static.bag
+```
+
+逆解静态测试：
+
+```bash
+cd ~/p600_arm_control
+bash shell/Experiment/uam_mocap.sh exp2 <VRPN_SERVER_IP>
+```
+
+逆解原位静态测试：
+
+```bash
+bash shell/Experiment/uam_control_desired_exp2_static_ik.sh
+```
+
+逆解多组静态测试，包含飞机虚拟扰动：
+
+```bash
+bash shell/Experiment/uam_control_desired_exp2_validation.sh
+```
+
+### 三、实验三
+
+```bash
+cd ~/p600_arm_control
+bash shell/Experiment/uam_mocap.sh exp3 192.168.228.99
+bash shell/Experiment/uam_control_desired_exp3.sh
+```
+
+### 四、实验四
+
+```bash
+cd ~/p600_arm_control
+bash shell/Experiment/uam_mocap.sh exp4 <VRPN_SERVER_IP>
+bash shell/Experiment/uam_control_desired_exp4.sh
+```
+
+## 注意事项
+
+- 真机实验需要同时启动本仓库与 `UAV_project`。
+- 多个脚本默认使用 `~/p600_arm_control` 和 `~/UAV_project`，换路径部署时需要同步调整或创建软链接。
+- 实验 4 只使用动捕提供的挂环中心位置，不使用视觉检测，也不闭环控制挂环姿态。
+- `record_experiment_data.sh` 会提示缺失话题，但不会因为某个话题暂时不存在而中止录包。
